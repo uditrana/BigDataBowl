@@ -32,7 +32,7 @@ TB	#D50A0A	red	#0A0A08 black
 TEN	#0C2340	blue	#4B92DB light_blue
 WAS	#773141	red	#FFB612 yellow
 AFC	#D50A0A	red	#A5ACAF gray
-NFC	#013369	blue	#A5ACAF gray
-LV	#000000	black	#A5ACAF gray
-FTBL #624a2e brown #000000 black
+NFC #013369	blue	#A5ACAF gray
+LV  #000000	black	#A5ACAF gray
+FTBL    #624a2e brown #000000 black
 FBL #624a2e brown #000000 black
