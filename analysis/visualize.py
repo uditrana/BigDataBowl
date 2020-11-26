@@ -1,5 +1,6 @@
 # Utility Libraries
 from datetime import datetime
+import matplotlib as mpl
 import pytz
 import pandas as pd
 
@@ -7,7 +8,6 @@ import pandas as pd
 import numpy as np
 
 # Plotting libraries
-import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib import animation
 import matplotlib.patches as patches
@@ -35,7 +35,7 @@ colors = pd.read_csv(
 
 
 class AnimatePlay:
-    def __init__(self, play_df, plot_size_len) -> None:
+    def __init__(self, play_df, plot_size_len, pitch_control_df=None) -> None:
         """Initializes the datasets used to animate the play.
 
         Parameters
@@ -53,6 +53,8 @@ class AnimatePlay:
         self._MAX_FIELD_X = 120
         self._MAX_FIELD_PLAYERS = 22
 
+        self._show_control = type(pitch_control_df) == type(None)
+        self._pitch_control_df = pitch_control_df
         # self._CPLT = sns.color_palette("husl", 2)
         self._offense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'OFF']['teamAbbr'].iloc[0]]
         self._defense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'DEF']['teamAbbr'].iloc[0]]
@@ -112,7 +114,7 @@ class AnimatePlay:
 
         # ball_snap_df = self._frame_data[(self._frame_data.event == 'ball_snap') & (self._frame_data.team == 'football')]
         self._ax_field.axvline(self._frame_data.iloc[0]['los'], color='k', linestyle='--')
-        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}")
+        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='white')
         self._frame_text = self._ax_field.text(5, 51, 0, fontsize=15, color='white', ha='center')
         self._event_text = self._ax_field.text(5, 49, None, fontsize=10, color='white', ha='center')
 
@@ -124,11 +126,19 @@ class AnimatePlay:
             self._ax_field.axvline(idx, color='k', linestyle='-', alpha=0.05)
 
         self._ax_field.add_patch(patches.Rectangle((0, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._defense_color['color2'].to_string(index=False).strip()))
+                                                   color=self._defense_color['color1'].to_string(index=False).strip()))
         self._ax_field.add_patch(patches.Rectangle((110, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._offense_color['color2'].to_string(index=False).strip()))
+                                                   color=self._offense_color['color1'].to_string(index=False).strip()))
 
         self._scat_field = self._ax_field.scatter([], [], s=100, color=colors.loc[colors.team == 'FTBL']['color1'])
+
+        if self._show_control:
+            self._scat_control = self._ax_field.scatter(
+                [],
+                [],
+                s=300, marker='s', alpha=0.5,
+                norm=mpl.colors.Normalize(vmin=-1., vmax=1.), cmap='gray')
+
         self._scat_offense = self._ax_offense.scatter(
             [],
             [],
@@ -176,6 +186,12 @@ class AnimatePlay:
                 self._scat_defense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
 
         # jersey_df = pos_df[pos_df.jerseyNumber.notnull()]
+
+        if self._show_control:
+            pc = self._pitch_control_df.at[frameId, 'pc']
+            self._scat_control.set_offsets(np.array(list(map(lambda x: [x[0], x[1]], pc))))
+            self._scat_control.set_array(np.array(list(map(lambda x: x[2], pc))))
+            # self._scat_control.set_color()
 
         for (index, row) in pos_df[pos_df.jerseyNumber.notnull()].reset_index().iterrows():
             self._scat_jersey_list[index].set_position((row.x, row.y))
