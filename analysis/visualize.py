@@ -1,6 +1,7 @@
 # Utility Libraries
 from datetime import datetime
 import matplotlib as mpl
+from pandas.core import frame
 import pytz
 import pandas as pd
 
@@ -44,7 +45,7 @@ colors = pd.read_csv(
 
 
 class AnimatePlay:
-    def __init__(self, play_df, plot_size_len, field_control_df=None) -> None:
+    def __init__(self, play_df, plot_size_len, field_prob_df=None) -> None:
         """Initializes the datasets used to animate the play.
 
         Parameters
@@ -61,9 +62,10 @@ class AnimatePlay:
         self._MAX_FIELD_Y = 53.3
         self._MAX_FIELD_X = 120
         self._MAX_FIELD_PLAYERS = 22
+        self.YARD_PIXEL_COUNT = 70
 
-        self._show_control = type(field_control_df) != type(None)
-        self._field_control_df = field_control_df
+        self._show_p_mass = type(field_prob_df) != type(None)
+        self._field_prob_df = field_prob_df
         # self._CPLT = sns.color_palette("husl", 2)
         self._offense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'OFF']['teamAbbr'].iloc[0]]
         self._defense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'DEF']['teamAbbr'].iloc[0]]
@@ -77,6 +79,10 @@ class AnimatePlay:
                 index=False).strip() == self._defense_color['color1_family'].to_string(
                 index=False).strip():
             self._defense_colors = self._defense_colors[::-1]
+
+        self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
+                                             (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        # print(self._pass_arrival_loc, type(self._pass_arrival_loc))
 
         # print(self._offense_color, self._defense_color, self._offense_colors, self._defense_colors)
 
@@ -139,6 +145,8 @@ class AnimatePlay:
         self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='white')
         self._frame_text = self._ax_field.text(5, 51, 0, fontsize=15, color='white', ha='center')
         self._event_text = self._ax_field.text(5, 49, None, fontsize=10, color='white', ha='center')
+        self._ball_loc_text = self._ax_field.text(5, 47, None, fontsize=12, color='white', ha='center')
+        self._pass_arr_text = self._ax_field.text(5, 45, None, fontsize=12, color='white', ha='center')
 
         self.set_axis_plots(self._ax_offense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
         self.set_axis_plots(self._ax_defense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
@@ -152,16 +160,15 @@ class AnimatePlay:
         self._ax_field.add_patch(patches.Rectangle((110, 0), 10, self._MAX_FIELD_Y,
                                                    color=self._offense_colors[0]))
 
-        if self._show_control:
-            self._scat_control = self._ax_field.scatter(
+        if self._show_p_mass:
+            self._scat_field_pmass1 = self._ax_field.scatter(
                 [],
                 [],
-                s=80, marker='s', alpha=0.7,
-                norm=mpl.colors.Normalize(vmin=-1., vmax=1.), cmap='RdBu')
-            self._scat_dead = self._ax_field.scatter(
+                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6,)
+            self._scat_field_pmass2 = self._ax_field.scatter(
                 [],
                 [],
-                s=80, marker='s')
+                s=self.YARD_PIXEL_COUNT, marker='s')
 
         self._scat_offense = self._ax_offense.scatter(
             [],
@@ -202,12 +209,16 @@ class AnimatePlay:
         event = pos_df.event.unique()[0]
         self._frame_text.set_text(str(frameId))
         self._event_text.set_text(str(event))
+        self._ball_loc_text.set_text(str(pos_df.loc[pos_df.nflId == 0][['x', 'y']].to_records(index=False)))
+        self._pass_arr_text.set_text(str(self._pass_arrival_loc))
 
         for label in pos_df.team_pos.unique():
             label_data = pos_df[pos_df.team_pos == label]
 
             if label == 'FTBL':
-                self._scat_field.set_offsets(np.hstack([label_data.x, label_data.y]))
+                # self._scat_field.set_offsets(np.hstack([label_data.x, label_data.y]))
+                self._scat_field.set_offsets(
+                    np.vstack([[self._pass_arrival_loc[0], label_data.x], [self._pass_arrival_loc[1], label_data.y]]).T)
             elif label == 'OFF':
                 self._scat_offense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
             elif label == 'DEF':
@@ -215,21 +226,29 @@ class AnimatePlay:
 
         # jersey_df = pos_df[pos_df.jerseyNumber.notnull()]
 
-        if self._show_control:
-            control_df = self._field_control_df.loc[self._field_control_df.frameId == frameId]
-            if len(control_df > 0):
-                self._scat_control.set_offsets(np.vstack([control_df.ball_end_x, control_df.ball_end_y]).T)
-                self._scat_control.set_array(
-                    np.array(list(map(lambda x: x[0]-x[1], control_df[['cp_off', 'cp_def']].to_records(index=False)))))
-                # self._scat_control.set_cmap(mpl.colors.Colormap.ListedColormap(['red', 'white', 'blue']))
-                self._scat_control.set_cmap('RdBu')
+        if self._show_p_mass:
+            frame_prob_df = self._field_prob_df.loc[self._field_prob_df.frameId == frameId]
+            # print(f"frameId: {frameId}, ")
+            if len(frame_prob_df > 0):
+                try:
+                    self._scat_field_pmass1.set_array(frame_prob_df['p_mass_1'].to_numpy())
+                    self._scat_field_pmass1.set_offsets(
+                        np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
+                    # self._scat_control.set_cmap(mpl.colors.Colormap.ListedColormap(['red', 'white', 'blue']))
+                    self._scat_field_pmass1.set_cmap('RdBu')
+                except:
+                    pass
+                try:
+                    self._scat_field_pmass2.set_color([(105/255, 105/255, 105/255, p)
+                                                       for p in np.clip(frame_prob_df['p_mass_2'], 0, 1)])
+                    self._scat_field_pmass2.set_offsets(
+                        np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
+                except:
+                    pass
 
-                self._scat_dead.set_offsets(np.vstack([control_df.ball_end_x, control_df.ball_end_y]).T)
-                self._scat_dead.set_color([(105/255, 105/255, 105/255, p)
-                                           for p in np.clip(control_df['cp_dead'], 0, 1)])
             else:
-                self._scat_control.set_offsets([])
-                self._scat_dead.set_offsets([])
+                self._scat_field_pmass1.set_offsets([])
+                self._scat_field_pmass2.set_offsets([])
 
         for (index, row) in pos_df[pos_df.jerseyNumber.notnull()].reset_index().iterrows():
             self._scat_jersey_list[index].set_position((row.x, row.y))
@@ -491,29 +510,6 @@ class AnimatePlay:
 #                 levels=50, cmap='PiYG', vmin=0.45, vmax=0.55, alpha=0.7)
 #             # self._fig.colorbar(self._pitch_control_contour, extend='min', shrink=0.9, ax=self._ax_field)
 #         return (self._scat_football, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
-
-
-verts = [
-    (-0.4, 0.),  # left, bottom
-    (-0.2, 0.2),  # left, top
-    (0.2, 0.2),  # right, top
-    (0.4, -0.),  # right, bottom
-    (0.2, -0.2),  # left, bottom
-    (-0.2, -0.2),  # left, top
-    (-0.4, 0),  # left, bottom
-]
-
-codes = [
-    Path.MOVETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.CLOSEPOLY,
-]
-
-ballPath = Path(verts, codes, closed=True)
 
 
 def create_football_field_plot(linenumbers=True,
