@@ -1,5 +1,7 @@
 # Utility Libraries
 from datetime import datetime
+import matplotlib as mpl
+from pandas.core import frame
 import pytz
 import pandas as pd
 
@@ -7,35 +9,43 @@ import pandas as pd
 import numpy as np
 
 # Plotting libraries
-import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib import animation
 import matplotlib.patches as patches
-
 from matplotlib.path import Path
+
+# colors
+import seaborn as sns
+
+verts = [
+    (-0.4, 0.),  # left, bottom
+    (-0.2, 0.2),  # left, top
+    (0.2, 0.2),  # right, top
+    (0.4, -0.),  # right, bottom
+    (0.2, -0.2),  # left, bottom
+    (-0.2, -0.2),  # left, top
+    (-0.4, 0),  # left, bottom
+]
+
+codes = [
+    Path.MOVETO,
+    Path.LINETO,
+    Path.LINETO,
+    Path.LINETO,
+    Path.LINETO,
+    Path.LINETO,
+    Path.CLOSEPOLY,
+]
+
+ballPath = Path(verts, codes, closed=True)
+
 
 colors = pd.read_csv(
     'https://raw.githubusercontent.com/uditrana/NFLFastR_analysis/master/nfl_colors.tsv', delimiter='\t')
 
-# Animation
-# Animation Class
-# First let us make an animation that will show all of the entities moving across the pitch over time through the play. We are in luck that we have timestamps for each of the timepoints when the measurement was taken. This allows us to make a very precise estimate as to what the sampling rate is, and thus we can set an accurate framerate for the animation to simulate the play at "real time". This is calculated on line 26 as self._mean_interval_ms.
-
-# In this animation we plot:
-
-# Player positions
-# Line of scrimmage
-# Ball
-# Velocity vectors of the players
-# Orientation of players
-# Player last name
-# Player position
-# Player number
-# On small screens this may be too much information, but this just shows how you can do it. Feel free to remove as you wish. I will not go into this animation class in too much detail as it is not the focus of this notebook. Feel free to go through it, it is mostly just using matplotlib and basic math to show what we want.
-
 
 class AnimatePlay:
-    def __init__(self, play_df, plot_size_len) -> None:
+    def __init__(self, play_df, plot_size_len, field_prob_df=None) -> None:
         """Initializes the datasets used to animate the play.
 
         Parameters
@@ -52,10 +62,30 @@ class AnimatePlay:
         self._MAX_FIELD_Y = 53.3
         self._MAX_FIELD_X = 120
         self._MAX_FIELD_PLAYERS = 22
+        self.YARD_PIXEL_COUNT = 70
 
+        self._show_p_mass = type(field_prob_df) != type(None)
+        self._field_prob_df = field_prob_df
         # self._CPLT = sns.color_palette("husl", 2)
         self._offense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'OFF']['teamAbbr'].iloc[0]]
         self._defense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'DEF']['teamAbbr'].iloc[0]]
+        self._offense_colors = [
+            self._offense_color['color1'].to_string(index=False).strip(),
+            self._offense_color['color2'].to_string(index=False).strip()]
+        self._defense_colors = [
+            self._defense_color['color1'].to_string(index=False).strip(),
+            self._defense_color['color2'].to_string(index=False).strip()]
+        if self._offense_color['color1_family'].to_string(
+                index=False).strip() == self._defense_color['color1_family'].to_string(
+                index=False).strip():
+            self._defense_colors = self._defense_colors[::-1]
+
+        self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
+                                             (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        # print(self._pass_arrival_loc, type(self._pass_arrival_loc))
+
+        # print(self._offense_color, self._defense_color, self._offense_colors, self._defense_colors)
+
         self._frame_data = play_df
         self._game_id, self._play_id = play_df.iloc[:1][['gameId', 'playId']].to_records(index=False)[0]
         self._times = sorted(play_df.time.unique())
@@ -112,9 +142,11 @@ class AnimatePlay:
 
         # ball_snap_df = self._frame_data[(self._frame_data.event == 'ball_snap') & (self._frame_data.team == 'football')]
         self._ax_field.axvline(self._frame_data.iloc[0]['los'], color='k', linestyle='--')
-        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}")
+        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='white')
         self._frame_text = self._ax_field.text(5, 51, 0, fontsize=15, color='white', ha='center')
         self._event_text = self._ax_field.text(5, 49, None, fontsize=10, color='white', ha='center')
+        self._ball_loc_text = self._ax_field.text(5, 47, None, fontsize=12, color='white', ha='center')
+        self._pass_arr_text = self._ax_field.text(5, 45, None, fontsize=12, color='white', ha='center')
 
         self.set_axis_plots(self._ax_offense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
         self.set_axis_plots(self._ax_defense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
@@ -124,21 +156,30 @@ class AnimatePlay:
             self._ax_field.axvline(idx, color='k', linestyle='-', alpha=0.05)
 
         self._ax_field.add_patch(patches.Rectangle((0, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._defense_color['color2'].to_string(index=False).strip()))
+                                                   color=self._defense_colors[0]))
         self._ax_field.add_patch(patches.Rectangle((110, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._offense_color['color2'].to_string(index=False).strip()))
+                                                   color=self._offense_colors[0]))
 
-        self._scat_field = self._ax_field.scatter([], [], s=100, color=colors.loc[colors.team == 'FTBL']['color1'])
+        if self._show_p_mass:
+            self._scat_field_pmass1 = self._ax_field.scatter(
+                [],
+                [],
+                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6,)
+            self._scat_field_pmass2 = self._ax_field.scatter(
+                [],
+                [],
+                s=self.YARD_PIXEL_COUNT, marker='s')
+
         self._scat_offense = self._ax_offense.scatter(
             [],
             [],
-            s=500, color=self._offense_color['color1'],
-            edgecolors=self._offense_color['color2'])
+            s=500, color=self._offense_colors[0],
+            edgecolors=self._offense_colors[1])
         self._scat_defense = self._ax_defense.scatter(
             [],
             [],
-            s=500, color=self._defense_color['color1'],
-            edgecolors=self._defense_color['color2'])
+            s=500, color=self._defense_colors[0],
+            edgecolors=self._defense_colors[1])
 
         self._scat_jersey_list = []
         self._scat_number_list = []
@@ -155,6 +196,10 @@ class AnimatePlay:
 
             self._vel_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
             self._acc_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
+            # self._or_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
+
+        self._scat_field = self._ax_field.scatter(
+            [], [], s=200, color=colors.loc[colors.team == 'FTBL']['color1'], marker=ballPath)
 
         return (self._scat_field, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
 
@@ -164,18 +209,46 @@ class AnimatePlay:
         event = pos_df.event.unique()[0]
         self._frame_text.set_text(str(frameId))
         self._event_text.set_text(str(event))
+        self._ball_loc_text.set_text(str(pos_df.loc[pos_df.nflId == 0][['x', 'y']].to_records(index=False)))
+        self._pass_arr_text.set_text(str(self._pass_arrival_loc))
 
         for label in pos_df.team_pos.unique():
             label_data = pos_df[pos_df.team_pos == label]
 
             if label == 'FTBL':
-                self._scat_field.set_offsets(np.hstack([label_data.x, label_data.y]))
+                # self._scat_field.set_offsets(np.hstack([label_data.x, label_data.y]))
+                self._scat_field.set_offsets(
+                    np.vstack([[self._pass_arrival_loc[0], label_data.x], [self._pass_arrival_loc[1], label_data.y]]).T)
             elif label == 'OFF':
                 self._scat_offense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
             elif label == 'DEF':
                 self._scat_defense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
 
         # jersey_df = pos_df[pos_df.jerseyNumber.notnull()]
+
+        if self._show_p_mass:
+            frame_prob_df = self._field_prob_df.loc[self._field_prob_df.frameId == frameId]
+            # print(f"frameId: {frameId}, ")
+            if len(frame_prob_df > 0):
+                try:
+                    self._scat_field_pmass1.set_array(frame_prob_df['p_mass_1'].to_numpy())
+                    self._scat_field_pmass1.set_offsets(
+                        np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
+                    # self._scat_control.set_cmap(mpl.colors.Colormap.ListedColormap(['red', 'white', 'blue']))
+                    self._scat_field_pmass1.set_cmap('RdBu')
+                except:
+                    pass
+                try:
+                    self._scat_field_pmass2.set_color([(105/255, 105/255, 105/255, p)
+                                                       for p in np.clip(frame_prob_df['p_mass_2'], 0, 1)])
+                    self._scat_field_pmass2.set_offsets(
+                        np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
+                except:
+                    pass
+
+            else:
+                self._scat_field_pmass1.set_offsets([])
+                self._scat_field_pmass2.set_offsets([])
 
         for (index, row) in pos_df[pos_df.jerseyNumber.notnull()].reset_index().iterrows():
             self._scat_jersey_list[index].set_position((row.x, row.y))
@@ -186,12 +259,6 @@ class AnimatePlay:
             self._scat_name_list[index].set_text(row.displayName.split()[-1])
 
             # player_orientation_rad = self.deg_to_rad(self.convert_orientation(row.o))
-            # player_direction_rad = row.dir_rad
-            # player_speed = row.s
-            # player_accel = row.a
-
-            # player_vel = np.array([np.real(self.polar_to_z(player_speed, player_direction_rad)),
-            #                        np.imag(self.polar_to_z(player_speed, player_direction_rad))])
             # player_orient = np.array([np.real(self.polar_to_z(2, player_orientation_rad)),
             #                           np.imag(self.polar_to_z(2, player_orientation_rad))])
 
@@ -203,8 +270,11 @@ class AnimatePlay:
             self._acc_list[index] = self._ax_field.add_patch(
                 patches.Arrow(row.x, row.y, row.a_x, row.a_y, color='grey', width=2))
 
-        return (self._scat_field, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
+            # self._or_list[index].remove()
+            # self._or_list[index] = self._ax_field.add_patch(
+            #     patches.Arrow(row.x, row.y, row.a_x, row.a_y, color='grey', width=2))
 
+        return (self._scat_field, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
 
 # class AnimatePlayPitchControl(AnimatePlay):
 #     def __init__(self, play_df, plot_size_len, show_control=True) -> None:
@@ -440,29 +510,6 @@ class AnimatePlay:
 #                 levels=50, cmap='PiYG', vmin=0.45, vmax=0.55, alpha=0.7)
 #             # self._fig.colorbar(self._pitch_control_contour, extend='min', shrink=0.9, ax=self._ax_field)
 #         return (self._scat_football, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
-
-
-verts = [
-    (-0.4, 0.),  # left, bottom
-    (-0.2, 0.2),  # left, top
-    (0.2, 0.2),  # right, top
-    (0.4, -0.),  # right, bottom
-    (0.2, -0.2),  # left, bottom
-    (-0.2, -0.2),  # left, top
-    (-0.4, 0),  # left, bottom
-]
-
-codes = [
-    Path.MOVETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.LINETO,
-    Path.CLOSEPOLY,
-]
-
-ballPath = Path(verts, codes, closed=True)
 
 
 def create_football_field_plot(linenumbers=True,
