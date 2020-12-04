@@ -82,9 +82,15 @@ def normalizeData(week):
     track_df = track_df.rename(columns={'a': 'a_old'})
     track_df = track_df.round(2)
 
+    mapping = {'DB': 'DB', 'CB': 'DB', 'S': 'S', 'SS': 'S', 'FS': 'S', 'WR': 'WR', 'MLB': 'LB', 'OLB': 'LB',
+               'ILB': 'LB', 'LB': 'LB', 'DL': 'DL', 'DT': 'DL', 'DE': 'DL', 'NT': 'DL', 'QB': 'QB', 'RB': 'RB',
+               'HB': 'RB', 'TE': 'TE', 'P': 'ST', 'K': 'ST', 'LS': 'ST', 'FB': 'FB'}
+    track_df['position_general'] = track_df.position.map(mapping)
+
     track_df = track_df[['gameId', 'playId', 'frameId', 'event', 'nflId', 'displayName', 'jerseyNumber', 'position',
-                         'team', 'team_pos', 'teamAbbr', 'route', 'time', 'los', 'x', 'y', 'dis', 'o', 's', 's_dir',
-                         's_dir_rad', 'v_x', 'v_y', 'v_theta', 'v_mag', 'a_old', 'a_x', 'a_y', 'a_theta', 'a_mag']]
+                         'position_general', 'team', 'team_pos', 'teamAbbr', 'route', 'time', 'los', 'x', 'y', 'dis',
+                         'o', 's', 's_dir', 's_dir_rad', 'v_x', 'v_y', 'v_theta', 'v_mag', 'a_old', 'a_x', 'a_y',
+                         'a_theta', 'a_mag']]
 
     print(f"Week{week} | Done normalizing | {round(time.time()-prev_time,4)} s")
     prev_time = time.time()
