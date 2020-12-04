@@ -80,8 +80,11 @@ class AnimatePlay:
                 index=False).strip():
             self._defense_colors = self._defense_colors[::-1]
 
-        self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
-                                             (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        try:
+            self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
+                                                 (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        except:
+            self._pass_arrival_loc = np.array([-10, -10])
         # print(self._pass_arrival_loc, type(self._pass_arrival_loc))
 
         # print(self._offense_color, self._defense_color, self._offense_colors, self._defense_colors)
@@ -239,7 +242,8 @@ class AnimatePlay:
                 except:
                     pass
                 try:
-                    self._scat_field_pmass2.set_color([(105/255, 105/255, 105/255, p)
+                    grayscale = 0
+                    self._scat_field_pmass2.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
                                                        for p in np.clip(frame_prob_df['p_mass_2'], 0, 1)])
                     self._scat_field_pmass2.set_offsets(
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
