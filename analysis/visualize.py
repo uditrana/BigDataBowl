@@ -244,7 +244,7 @@ class AnimatePlay:
                 except:
                     pass
                 try:
-                    grayscale = 100
+                    grayscale = 50
                     self._scat_field_pmass2.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
                                                        for p in np.clip(frame_prob_df['p_mass_2'], 0, 1)])
                     self._scat_field_pmass2.set_offsets(
