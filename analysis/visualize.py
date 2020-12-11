@@ -80,8 +80,11 @@ class AnimatePlay:
                 index=False).strip():
             self._defense_colors = self._defense_colors[::-1]
 
-        self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
-                                             (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        try:
+            self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
+                                                 (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        except:
+            self._pass_arrival_loc = np.array([-10, -10])
         # print(self._pass_arrival_loc, type(self._pass_arrival_loc))
 
         # print(self._offense_color, self._defense_color, self._offense_colors, self._defense_colors)
@@ -156,15 +159,15 @@ class AnimatePlay:
             self._ax_field.axvline(idx, color='k', linestyle='-', alpha=0.05)
 
         self._ax_field.add_patch(patches.Rectangle((0, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._defense_colors[0]))
+                                                   color=self._defense_colors[0], alpha=0.2))
         self._ax_field.add_patch(patches.Rectangle((110, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._offense_colors[0]))
+                                                   color=self._offense_colors[0], alpha=0.2))
 
         if self._show_p_mass:
             self._scat_field_pmass1 = self._ax_field.scatter(
                 [],
                 [],
-                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6,)
+                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6, c=[])
             self._scat_field_pmass2 = self._ax_field.scatter(
                 [],
                 [],
@@ -235,11 +238,14 @@ class AnimatePlay:
                     self._scat_field_pmass1.set_offsets(
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
                     # self._scat_control.set_cmap(mpl.colors.Colormap.ListedColormap(['red', 'white', 'blue']))
+                    # self._scat_field_pmass1.set_cmap('bwr')
                     self._scat_field_pmass1.set_cmap('RdBu')
+                    self._scat_field_pmass1.set_norm()
                 except:
                     pass
                 try:
-                    self._scat_field_pmass2.set_color([(105/255, 105/255, 105/255, p)
+                    grayscale = 50
+                    self._scat_field_pmass2.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
                                                        for p in np.clip(frame_prob_df['p_mass_2'], 0, 1)])
                     self._scat_field_pmass2.set_offsets(
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
