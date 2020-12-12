@@ -252,9 +252,9 @@ class AnimatePlay:
                 except:
                     pass
 
-            else:
-                self._scat_field_pmass1.set_offsets([])
-                self._scat_field_pmass2.set_offsets([])
+            # else:
+            #     self._scat_field_pmass1.set_offsets()
+            #     self._scat_field_pmass2.set_offsets()
 
         for (index, row) in pos_df[pos_df.jerseyNumber.notnull()].reset_index().iterrows():
             self._scat_jersey_list[index].set_position((row.x, row.y))
