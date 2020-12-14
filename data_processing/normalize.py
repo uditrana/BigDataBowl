@@ -40,7 +40,9 @@ def normalizeData(week):
     print(f"Week{week} | Done joins | {round(time.time()-prev_time, 4)} s")
     prev_time = time.time()
 
-    track_df['los_norm'] = 40
+    track_df['los_norm'] = track_df.los
+    track_df.loc[track_df.playDirection == 'left', 'los_norm'] = 120-track_df.los_norm
+
     track_df['x_norm'] = track_df['x']-(track_df['los']-track_df['los_norm'])
     track_df['y_norm'] = track_df['y']
     track_df['o_norm'] = track_df['o']
@@ -104,6 +106,6 @@ def normalizeData(week):
 
 WEEKS = list(range(1, 18))
 # WEEKS = ['toy']
-pool = multiprocessing.Pool(14)
+pool = multiprocessing.Pool(10)
 pool.map(normalizeData, WEEKS)
 pool.close()
