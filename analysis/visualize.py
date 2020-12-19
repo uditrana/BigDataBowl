@@ -15,7 +15,7 @@ import matplotlib.patches as patches
 from matplotlib.path import Path
 
 # colors
-import seaborn as sns
+# import seaborn as sns
 
 verts = [
     (-0.4, 0.),  # left, bottom
@@ -239,7 +239,7 @@ class AnimatePlay:
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
                     # self._scat_control.set_cmap(mpl.colors.Colormap.ListedColormap(['red', 'white', 'blue']))
                     # self._scat_field_pmass1.set_cmap('bwr')
-                    self._scat_field_pmass1.set_cmap('RdBu')
+                    self._scat_field_pmass1.set_cmap('Blues')
                     self._scat_field_pmass1.set_norm()
                 except:
                     pass
