@@ -3,3 +3,4 @@ data/*
 **/.ipynb_checkpoints/**
 analysis/.ipynb_checkpoints/**
 analysis/.ipynb_aml_checkpoints/**
+output/*
