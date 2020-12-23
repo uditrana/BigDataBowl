@@ -58,7 +58,7 @@ params.a_max = 7
 params.s_max = 9
 # params.reax_t = params.s_max/params.a_max
 params.reax_t = 0.2
-params.tti_sigma = 0.45
+params.tti_sigma = 0.318
 params.cell_length = 1
 params.alpha = 1.5
 vars(params)
