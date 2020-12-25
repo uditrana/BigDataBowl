@@ -324,8 +324,8 @@ if __name__ == '__main__':
     # args
     parser = argparse.ArgumentParser()
     parser.add_argument('-d', '--data_dir', default='../data', help='path to directory with data files')
-    parser.add_argument('-j', '--num_workers', default=4, help='number of data loader workers')
-    parser.add_argument('-b', '--batch_size', default=4, help='batch size to use')
+    parser.add_argument('-j', '--num_workers', default=4, help='number of data loader workers', type=int)
+    parser.add_argument('-b', '--batch_size', default=4, help='batch size to use', type=int)
     parser.add_argument('-e', '--epochs', default=5, help='number of training epochs', type=int)
     parser.add_argument('-t', '--tuning', default=None, help='parameter to tune (None if running in eval)')
     parser.add_argument('-s', '--split', default='1', help='week number to run on or all')
@@ -352,9 +352,9 @@ if __name__ == '__main__':
         all_weeks = False
         wk = args.split
     ds = PlaysDataset(data_dir=args.data_dir, wk=wk, all_weeks=all_weeks, event_filter=event_filter, tuning=TUNING)
-    loader = torch.utils.data.DataLoader(ds, batch_size=4, num_workers=0, shuffle=True, pin_memory=True)
+    loader = torch.utils.data.DataLoader(ds, batch_size=args.batch_size, num_workers=0, shuffle=True, pin_memory=True)
 
-    model = CompProbModel(tti_sigma=0.8, tuning=TUNING)
+    model = CompProbModel(tti_sigma=0.5, tuning=TUNING)
     loss_fn = torch.nn.BCELoss()
 
     # check if we want cuda
