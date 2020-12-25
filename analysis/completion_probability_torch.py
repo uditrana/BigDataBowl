@@ -137,7 +137,7 @@ class PlaysDataset(torch.utils.data.Dataset):
 
         try:
             frame['tof'] = np.clip(pd.to_timedelta(pd.to_datetime(frame[frame.event == 'pass_arrived'].time.iloc[0]) - \
-                    pd.to_datetime(frame[frame.event == 'pass_forward'].time.iloc[0])).total_seconds(), 0, 4.0)
+                    pd.to_datetime(frame[frame.event == 'pass_forward'].time.iloc[0])).total_seconds(), 0, 3.9)
         except IndexError:
             print(frame[frame.event == 'pass_arrived'])
             print(frame[frame.event == 'pass_forward'])
