@@ -244,83 +244,81 @@ class CompProbModel(torch.nn.Module):
         ball_end_y = frame[:, 0, -2].int()
         ball_field_ind = (ball_end_y * self.x.shape[0] + ball_end_x).long().view(-1, 1, 1).repeat(1, 1, p_int.size(-1))
 
-        # TODO(adit98) put this back into if statement and uncomment
-        p_int = torch.gather(p_int, 2, tof).squeeze()
-        p_int = torch.gather(p_int, 1, ball_field_ind).squeeze()
-        return p_int
+        if self.tuning == TuningParam.sigma:
+            p_int = torch.gather(p_int, 2, tof).squeeze()
+            p_int = torch.gather(p_int, 1, ball_field_ind).squeeze()
+            return p_int
 
-    #    if self.tuning == TuningParam.sigma:
+        else:
+            # get ball_start
+            ball_start = frame[:, 0, 10:12]
+            reach_vecs = self.field_locs - ball_start
+            reach_dist = torch.norm(reach_vecs, dim=-1)
+        
+            dx = reach_vecs[:, 0] #F
+            dy = reach_vecs[:, 1] #F
+            vx = dx[:, None]/self.T[None, :]   #F, T
+            vy = dy[:, None]/self.T[None, :]   #F, T
+            vz_0 = (self.T * self.g)/2    #T
 
-    #    else:
-    #        # get ball_start
-    #        ball_start = frame[0, 0, 10:12]
-    #        reach_vecs = self.field_locs - ball_start
-    #        reach_dist = torch.norm(reach_vecs, dim=-1)
-    #    
-    #        dx = reach_vecs[:, 0] #F
-    #        dy = reach_vecs[:, 1] #F
-    #        vx = dx[:, None]/self.T[None, :]   #F, T
-    #        vy = dy[:, None]/self.T[None, :]   #F, T
-    #        vz_0 = (self.T * self.g)/2    #T
+            # note that idx (i, j, k) into below arrays is invalid when j < k
+            traj_ts = self.T.repeat(len(self.field_locs), len(self.T), 1) #(F, T, T)
+            traj_locs_x_idx = torch.round(torch.clamp((ball_start[0]+vx.unsqueeze(-1)*self.T),
+                0, len(self.x)-1)).int() # F, T, T
+            traj_locs_y_idx = torch.round(torch.clamp((ball_start[1]+vy.unsqueeze(-1)*self.T),
+                0, len(self.y)-1)).int() # F, T, T
+            traj_locs_z = 2.0+vz_0.view(1, -1, 1)*traj_ts-0.5*self.g*traj_ts*traj_ts #F, T, T
+            lambda_z = torch.where((traj_locs_z<self.z_max) & (traj_locs_z>self.z_min), 1, 0) #F, T, T
+            
+            path_idxs = (traj_locs_y_idx * self.x.shape[0] + traj_locs_x_idx).flatten()  # (F*T*T,)
+            # 10*traj_ts - 1 converts the times into indices - hacky
+            traj_t_idxs = torch.round(10*traj_ts - 1).flatten().int()  # (F*T*T,)
+            p_int_traj = p_int[:, path_idxs.long(), traj_t_idxs.long()].reshape((-1,
+                *traj_locs_x_idx.shape, player_teams.shape[1])) * lambda_z.unsqueeze(-1) # B, F, T, T, J
+            p_int_traj_sum = p_int_traj.sum(dim=-1)
+            norm_factor = torch.maximum(torch.ones_like(p_int_traj_sum).float(), p_int_traj_sum)  # B, F, T, T
+            p_int_traj_norm = (p_int_traj / norm_factor.unsqueeze(-1))  # B, F, T, T, J
+            
+            # independent int probs at each point on trajectory
+            all_p_int_traj = torch.sum(p_int_traj_norm, dim=-1)  # B, F, T, T
+            off_p_int_traj = torch.sum((player_teams == 1)[:,None,None,None] * p_int_traj_norm, dim=-1)  # B, F, T, T
+            def_p_int_traj = torch.sum((player_teams == 0)[:,None,None,None] * p_int_traj_norm, dim=-1)  # B, F, T, T
+            ind_p_int_traj = p_int_traj_norm #use for analyzing specific players; # B, F, T, T, J
+            
+            # calc decaying residual probs after you take away p_int on earlier times in the traj 
+            compl_all_p_int_traj = 1-all_p_int_traj  # B, F, T, T
+            remaining_compl_p_int_traj = torch.cumprod(compl_all_p_int_traj, dim=-1)  # B, F, T, T
+            # maximum 0 because if it goes negative the pass has been caught by then and theres no residual probability
+            shift_compl_cumsum = torch.roll(remaining_compl_p_int_traj, 1, dims=-1)  # B, F, T, T
+            shift_compl_cumsum[:, :, 0] = 1
+            
+            # multiply residual prob by p_int at that location and lambda
+            lambda_all = self.tti_lambda_off * player_teams + self.tti_lambda_def * (1 - player_teams)  # B, J
+            off_completion_prob_dt = shift_compl_cumsum * off_p_int_traj * self.tti_lambda_off  # B, F, T, T
+            def_completion_prob_dt = shift_compl_cumsum * def_p_int_traj * self.tti_lambda_def  # B, F, T, T
+            all_completion_prob_dt = off_completion_prob_dt + def_completion_prob_dt  # B, F, T, T
+            ind_completion_prob_dt = shift_compl_cumsum.unsqueeze(-1) * ind_p_int_traj * lambda_all[:,None,None,None]  # F, T, T, J
+            
+            # now accumulate values over total traj for each team and take at T=t
+            all_completion_prob = torch.cumsum(all_completion_prob_dt, dim=-1)  # B, F, T, T
+            off_completion_prob = torch.cumsum(off_completion_prob_dt, dim=-1)  # B, F, T, T
+            def_completion_prob = torch.cumsum(def_completion_prob_dt, dim=-1)  # B, F, T, T
+            ind_completion_prob = torch.cumsum(ind_completion_prob_dt, dim=-2)  # B, F, T, T, J
+            
+            # this einsum takes the diagonal values over the last two axes where T = t
+            # this takes care of the t > T issue.
+            all_p_int_pass = torch.einsum('...ii->...i', all_completion_prob)  # B, F, T
+            off_p_int_pass = torch.einsum('...ii->...i', off_completion_prob)  # B, F, T
+            def_p_int_pass = torch.einsum('...ii->...i', def_completion_prob)  # B, F, T
+            ind_p_int_pass = torch.einsum('...iij->...ij', ind_completion_prob)  # B, F, T, J
+            no_p_int_pass = 1-all_p_int_pass  # B, F, T
 
-    #        # note that idx (i, j, k) into below arrays is invalid when j < k
-    #        traj_ts = self.T.repeat(len(self.field_locs), len(self.T), 1) #(F, T, T)
-    #        traj_locs_x_idx = torch.round(torch.clamp((ball_start[0]+vx.unsqueeze(-1)*self.T),
-    #            0, len(self.x)-1)).int() # F, T, T
-    #        traj_locs_y_idx = torch.round(torch.clamp((ball_start[1]+vy.unsqueeze(-1)*self.T),
-    #            0, len(self.y)-1)).int() # F, T, T
-    #        traj_locs_z = 2.0+vz_0.view(1, -1, 1)*traj_ts-0.5*self.g*traj_ts*traj_ts #F, T, T
-    #        lambda_z = torch.where((traj_locs_z<self.z_max) & (traj_locs_z>self.z_min), 1, 0) #F, T, T
-    #        
-    #        path_idxs = (traj_locs_y_idx * self.x.shape[0] + traj_locs_x_idx).flatten()  # (F*T*T,)
-    #        # 10*traj_ts - 1 converts the times into indices - hacky
-    #        traj_t_idxs = torch.round(10*traj_ts - 1).flatten().int()  # (F*T*T,)
-    #        p_int_traj = p_int[:, path_idxs.long(), traj_t_idxs.long()].reshape((-1,
-    #            *traj_locs_x_idx.shape, player_teams.shape[1])) * lambda_z.unsqueeze(-1) # B, F, T, T, J
-    #        p_int_traj_sum = p_int_traj.sum(dim=-1)
-    #        norm_factor = torch.maximum(torch.ones_like(p_int_traj_sum).float(), p_int_traj_sum)  # B, F, T, T
-    #        p_int_traj_norm = (p_int_traj / norm_factor.unsqueeze(-1))  # B, F, T, T, J
-    #        
-    #        # independent int probs at each point on trajectory
-    #        all_p_int_traj = torch.sum(p_int_traj_norm, dim=-1)  # B, F, T, T
-    #        off_p_int_traj = torch.sum((player_teams == 1)[:,None,None,None] * p_int_traj_norm, dim=-1)  # B, F, T, T
-    #        def_p_int_traj = torch.sum((player_teams == 0)[:,None,None,None] * p_int_traj_norm, dim=-1)  # B, F, T, T
-    #        ind_p_int_traj = p_int_traj_norm #use for analyzing specific players; # B, F, T, T, J
-    #        
-    #        # calc decaying residual probs after you take away p_int on earlier times in the traj 
-    #        compl_all_p_int_traj = 1-all_p_int_traj  # B, F, T, T
-    #        remaining_compl_p_int_traj = torch.cumprod(compl_all_p_int_traj, dim=-1)  # B, F, T, T
-    #        # maximum 0 because if it goes negative the pass has been caught by then and theres no residual probability
-    #        shift_compl_cumsum = torch.roll(remaining_compl_p_int_traj, 1, dims=-1)  # B, F, T, T
-    #        shift_compl_cumsum[:, :, 0] = 1
-    #        
-    #        # multiply residual prob by p_int at that location and lambda
-    #        lambda_all = self.tti_lambda_off * player_teams + self.tti_lambda_def * (1 - player_teams)  # B, J
-    #        off_completion_prob_dt = shift_compl_cumsum * off_p_int_traj * self.tti_lambda_off  # B, F, T, T
-    #        def_completion_prob_dt = shift_compl_cumsum * def_p_int_traj * self.tti_lambda_def  # B, F, T, T
-    #        all_completion_prob_dt = off_completion_prob_dt + def_completion_prob_dt  # B, F, T, T
-    #        ind_completion_prob_dt = shift_compl_cumsum.unsqueeze(-1) * ind_p_int_traj * lambda_all[:,None,None,None]  # F, T, T, J
-    #        
-    #        # now accumulate values over total traj for each team and take at T=t
-    #        all_completion_prob = torch.cumsum(all_completion_prob_dt, dim=-1)  # B, F, T, T
-    #        off_completion_prob = torch.cumsum(off_completion_prob_dt, dim=-1)  # B, F, T, T
-    #        def_completion_prob = torch.cumsum(def_completion_prob_dt, dim=-1)  # B, F, T, T
-    #        ind_completion_prob = torch.cumsum(ind_completion_prob_dt, dim=-2)  # B, F, T, T, J
-    #        
-    #        # this einsum takes the diagonal values over the last two axes where T = t
-    #        # this takes care of the t > T issue.
-    #        all_p_int_pass = torch.einsum('...ii->...i', all_completion_prob)  # B, F, T
-    #        off_p_int_pass = torch.einsum('...ii->...i', off_completion_prob)  # B, F, T
-    #        def_p_int_pass = torch.einsum('...ii->...i', def_completion_prob)  # B, F, T
-    #        ind_p_int_pass = torch.einsum('...iij->...ij', ind_completion_prob)  # B, F, T, J
-    #        no_p_int_pass = 1-all_p_int_pass  # B, F, T
-
-    #        assert torch.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
-    #        assert torch.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
-    #        # return off_p_int_pass, def_p_int_pass, ind_p_int_pass
-    #        ret_val = torch.gather(ind_p_int_pass, 2, tof).squeeze()  # B, F, J
-    #        ret_val = torch.gather(ret_val, 1, ball_field_ind).squeeze()  # B, J
-    #        return ret_val
+            assert torch.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
+            assert torch.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
+            # return off_p_int_pass, def_p_int_pass, ind_p_int_pass
+            ret_val = torch.gather(ind_p_int_pass, 2, tof).squeeze()  # B, F, J
+            ret_val = torch.gather(ret_val, 1, ball_field_ind).squeeze()  # B, J
+            return ret_val
 
 if __name__ == '__main__':
     # args
