@@ -18,7 +18,6 @@ class TuningParam(Enum):
 class PlaysDataset(torch.utils.data.Dataset):
     def __init__(self, data_dir, wk=1, all_weeks=False, event_filter=None, tuning=None):
         # time code TODO(adit98) remove this later
-        start_time = time.time()
         self.tuning = tuning
 
         # event_filter should be 'pass_forward' for sigma, 'pass_arrived' for lambda
@@ -58,40 +57,55 @@ class PlaysDataset(torch.utils.data.Dataset):
         ball_start_end = ball_end.merge(ball_start, on=['gameId', 'playId'])
 
         # remove plays where ball is thrown out of bounds
-        ball_start_end = ball_start_end.loc[(ball_start_end.ball_end_x <= 119.5) & (ball_start_end.ball_end_x >= 0.5) & (ball_start_end.ball_end_y <= 53.5) & (ball_start_end.ball_end_y >= -0.5)]
+        ball_start_end = ball_start_end.loc[(ball_start_end.ball_end_x <= 119.5) & (ball_start_end.ball_end_x >= 0.5) & \
+                (ball_start_end.ball_end_y <= 53.5) & (ball_start_end.ball_end_y >= -0.5)]
         
         # merge tracking_df with ball_end and ball_start
         tracking_df = tracking_df.loc[tracking_df.nflId != 0].merge(ball_start_end, on=['gameId', 'playId'])
 
         # this shit is fucking retarded why do you have to copy this
         play_list = tracking_df[['gameId', 'playId', 'forward_frameId', 'arrived_frameId']].copy()
-        play_list['forward_frameId'] = play_list.groupby(['gameId', 'playId']).forward_frameId.transform('mean')
-        play_list['arrived_frameId'] = play_list.groupby(['gameId', 'playId']).arrived_frameId.transform('mean')
+        play_list_grouped = play_list.groupby(['gameId', 'playId'])
+        play_list['forward_frameId'] = play_list_grouped.forward_frameId.transform('mean')
+        play_list['arrived_frameId'] = play_list_grouped.arrived_frameId.transform('mean')
         play_list = play_list.drop_duplicates()
 
         if self.tuning == TuningParam.sigma:
             # for each player, label whether they reached the ball (radius of 1.5 yds)
-            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['gameId', 'playId', 'frameId', 'nflId', 'team_pos', 'event', 'x', 'y', 'ball_end_x', 'ball_end_y', 'ball_start_x', 'ball_start_y']].copy()
+            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['gameId', 'playId',
+                'frameId', 'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y']].copy()
             self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
                         self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
                         self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
 
         elif self.tuning == TuningParam.lamb:
-            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['gameId', 'playId', 'frameId', 'nflId', 'team_pos', 'event', 'x', 'y', 'ball_end_x', 'ball_end_y', 'ball_start_x', 'ball_start_y']].copy()
+            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['gameId', 'playId',
+                'frameId', 'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y']].copy()
             self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
                         self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
                         self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
 
             # remove frames where nobody is close to ball when ball arrives
-            close_to_ball = self.player_reached.loc[self.player_reached.event == 'pass_arrived'].groupby(['gameId',
-                'playId']).filter(lambda x: x.close_to_ball.sum() > 0)[['gameId', 'playId']].copy().drop_duplicates()
+            close_to_ball = self.player_reached.groupby(['gameId', 'playId']).filter(lambda x: x.close_to_ball.sum() > 0)[['gameId',
+                'playId']].copy().drop_duplicates()
             tracking_df = close_to_ball.merge(tracking_df, on=['gameId', 'playId'])
             play_list = tracking_df[['gameId', 'playId']].copy()
 
+            # TODO @SS I think this should be DEF here?
             # control is given by (player is on offense) XOR (ball is caught)
-            self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'OFF') ^ self.player_reached['event'].isin(['pass_outcome_caught', 'pass_outcome_touchdown'])).astype(int)
+            self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'OFF') ^ \
+                    self.player_reached['event'].isin(['pass_outcome_caught', 'pass_outcome_touchdown'])).astype(int)
 
-        # store tracking_df
+        # replace positions with ints
+        self.player_reached = self.player_reached.replace('OFF', 1)
+        self.player_reached = self.player_reached.replace('DEF', 0)
+
+        # replace positions with ints, and store tracking_df
+        tracking_df = tracking_df.replace('OFF', 1)
+        tracking_df = tracking_df.replace('DEF', 0)
+
+        # drop duplicate columns and store tracking_df
+        self.player_reached = self.player_reached.drop(columns=['ball_end_x', 'ball_end_y'])
         self.all_plays = tracking_df
 
         # turn play list into np array
@@ -109,6 +123,7 @@ class PlaysDataset(torch.utils.data.Dataset):
         forward_frameId = self.play_list[idx, 2]
         arrived_frameId = self.play_list[idx, 3]
 
+        # THIS MIGHT BE WHERE SLOWDOWN HAPPENS - try and use np style indexing instead
         # load frame, sigma_label, and ball_end, only keep relevant frames
         frame = self.all_plays.loc[(self.all_plays.gameId == gameId) & (self.all_plays.playId == playId) & \
                 ((self.all_plays.frameId == forward_frameId) | (self.all_plays.frameId == arrived_frameId))]
@@ -121,50 +136,38 @@ class PlaysDataset(torch.utils.data.Dataset):
                     (self.all_plays.frameId == arrived_frameId)][['nflId', 'close_to_ball']].copy()
 
         try:
-            ball_end = self.player_reached[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId)][['ball_end_x', 'ball_end_y']].iloc[0].values
-            ball_start = self.player_reached[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId)][['ball_start_x', 'ball_start_y']].iloc[0].values
-        except IndexError:
-            print(gameId, playId)
-            print(self.player_reached[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId)])
-            raise IndexError
-
-        # clean up frame (remove QB, merge with sigma_lambda_label, ball_end, remove pass_arrived event)
-        frame = frame.loc[frame.position != 'QB'].merge(sigma_lambda_label, on='nflId')
-        frame = frame.replace('OFF', 1)
-        frame = frame.replace('DEF', 0)
-
-        try:
-            frame['tof'] = pd.to_timedelta(pd.to_datetime(frame[frame.event == 'pass_arrived'].time.iloc[0]) - pd.to_datetime(frame[frame.event == 'pass_forward'].time.iloc[0])).total_seconds()
+            frame['tof'] = np.clip(pd.to_timedelta(pd.to_datetime(frame[frame.event == 'pass_arrived'].time.iloc[0]) - \
+                    pd.to_datetime(frame[frame.event == 'pass_forward'].time.iloc[0])).total_seconds(), 0, 4.0)
         except IndexError:
             print(frame[frame.event == 'pass_arrived'])
             print(frame[frame.event == 'pass_forward'])
             raise IndexError
 
-        frame['ball_end_x'] = ball_end[0]
-        frame['ball_end_y'] = ball_end[1]
-        frame['ball_start_x'] = ball_start[0]
-        frame['ball_start_y'] = ball_start[1]
-
+        # this is used to pick which frame we want our PPCF to be calculated based off of
         if self.event_filter is not None:
             frame = frame[frame.event == self.event_filter]
 
         # generate data, label, fill missing data
-        
-        # SS changed for lambda
         if self.tuning == TuningParam.lamb:
             nflIds = sigma_lambda_label.loc[sigma_lambda_label.close_to_ball == 1, 'nflId'].values
-            data = torch.tensor(frame.loc[frame.nflId.isin(nflIds), ['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos', 'ball_end_x', 'ball_end_y', 'ball_start_x', 'ball_start_y', 'tof']].values).float()
+            data = torch.tensor(frame.loc[frame.nflId.isin(nflIds), ['nflId', 'x', 'y', 'v_x', 'v_y',
+                'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
             label = torch.tensor(sigma_lambda_label.loc[sigma_lambda_label.close_to_ball == 1, 'control_ball'].values)
         elif self.tuning == TuningParam.sigma:
-            data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos', 'ball_end_x', 'ball_end_y', 'ball_start_x', 'ball_start_y', 'tof']].values).float()
-            label = torch.tensor(frame['close_to_ball'].values)
+            data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
+                'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
+            label = torch.tensor(sigma_lambda_label['close_to_ball'].values)
         
         if data.size(0) < self.max_num:
             data = torch.cat([data, torch.ones([self.max_num - data.size(0), data.size(1)])], dim=0)
             label = torch.cat([label, torch.zeros([self.max_num - label.size(0)])], dim=0)
-        
-        return data, label.long()
 
+        # TODO(adit98) investigate why this happens, for now put this in as a hack
+        if data.size(0) > self.max_num:
+            data = data[:self.max_num]
+            label = label[:self.max_num]
+
+        return data, label.long()
 
 # Completion Probability Model
 class CompProbModel(torch.nn.Module):
@@ -240,6 +243,7 @@ class CompProbModel(torch.nn.Module):
 
         # get true pass (tof and ball_end) to tune on
         tof = torch.round(frame[:, 0, -1] * 10).long().view(-1, 1, 1, 1).repeat(1, p_int.size(1), 1, p_int.size(-1))
+
         ball_end_x = frame[:, 0, -3].int()
         ball_end_y = frame[:, 0, -2].int()
         ball_field_ind = (ball_end_y * self.x.shape[0] + ball_end_x).long().view(-1, 1, 1).repeat(1, 1, p_int.size(-1))
@@ -251,7 +255,7 @@ class CompProbModel(torch.nn.Module):
 
         else:
             # get ball_start
-            ball_start = frame[:, 0, 10:12]
+            ball_start = frame[:, 0, 8:10]
             reach_vecs = self.field_locs - ball_start
             reach_dist = torch.norm(reach_vecs, dim=-1)
         
@@ -273,8 +277,8 @@ class CompProbModel(torch.nn.Module):
             path_idxs = (traj_locs_y_idx * self.x.shape[0] + traj_locs_x_idx).flatten()  # (F*T*T,)
             # 10*traj_ts - 1 converts the times into indices - hacky
             traj_t_idxs = torch.round(10*traj_ts - 1).flatten().int()  # (F*T*T,)
-            p_int_traj = p_int[:, path_idxs.long(), traj_t_idxs.long()].reshape((-1,
-                *traj_locs_x_idx.shape, player_teams.shape[1])) * lambda_z.unsqueeze(-1) # B, F, T, T, J
+            p_int_traj = p_int[:, path_idxs.long(), traj_t_idxs.long()].reshape((-1, *traj_locs_x_idx.shape,
+                player_teams.shape[1])) * lambda_z.unsqueeze(-1) # B, F, T, T, J
             p_int_traj_sum = p_int_traj.sum(dim=-1)
             norm_factor = torch.maximum(torch.ones_like(p_int_traj_sum).float(), p_int_traj_sum)  # B, F, T, T
             p_int_traj_norm = (p_int_traj / norm_factor.unsqueeze(-1))  # B, F, T, T, J
