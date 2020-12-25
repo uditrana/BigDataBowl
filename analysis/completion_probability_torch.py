@@ -352,7 +352,7 @@ if __name__ == '__main__':
         all_weeks = False
         wk = args.split
     ds = PlaysDataset(data_dir=args.data_dir, wk=wk, all_weeks=all_weeks, event_filter=event_filter, tuning=TUNING)
-    loader = torch.utils.data.DataLoader(ds, batch_size=args.batch_size, num_workers=0, shuffle=True, pin_memory=True)
+    loader = torch.utils.data.DataLoader(ds, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True)
 
     model = CompProbModel(tti_sigma=0.5, tuning=TUNING)
     loss_fn = torch.nn.BCELoss()
