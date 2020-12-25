@@ -184,10 +184,10 @@ class CompProbModel(torch.nn.Module):
                 requires_grad=(self.tuning == TuningParam.lamb)).float()
         self.tti_lambda_def = Parameter(torch.tensor([tti_lambda_def]),
                 requires_grad=(self.tuning == TuningParam.lamb)).float()
-        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=False).float()
-        self.s_max = Parameter(torch.tensor([s_max]), requires_grad=False).float()
+        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=True).float()
+        self.s_max = Parameter(torch.tensor([s_max]), requires_grad=True).float()
         self.reax_t = Parameter(self.s_max / self.a_max, requires_grad=False).float()
-        self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed]), requires_grad=False).float()
+        self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed])).float()
         self.g = Parameter(torch.tensor([10.72468]), requires_grad=False) #y/s/s
         self.z_max = Parameter(torch.tensor([3.]), requires_grad=False)
         self.z_min = Parameter(torch.tensor([0.]), requires_grad=False)
@@ -333,6 +333,7 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epochs', default=5, help='number of training epochs', type=int)
     parser.add_argument('-t', '--tuning', default=None, help='parameter to tune (None if running in eval)')
     parser.add_argument('-s', '--split', default='1', help='week number to run on or all')
+    parser.add_argument('-w', '--reg_weight', default=0.1, help='regularization weight', type=int)
     args = parser.parse_args()
 
     # Initialize Dataset, Model and Run Training Loop
@@ -384,7 +385,9 @@ if __name__ == '__main__':
                 target = target.cuda()
 
             output = model(data)
-            loss = loss_fn(output, target.float())
+
+            # TODO(adit98) remove if this doesn't work properly (regularizing sigma magnitude)
+            loss = (1 - args.reg_weight) * loss_fn(output, target.float()) + args.reg_weight * torch.abs(model.tti_sigma)
             total_loss = total_loss + loss.detach().cpu().item()
 
             # step gradient
@@ -393,6 +396,9 @@ if __name__ == '__main__':
             optimizer.step()
 
             prog_bar.set_description("Batch %d Loss %.3f" % (epoch, total_loss / (ind + 1)))
+
+        # save model
+        torch.save(model.state_dict(), 'tuned_model.pt')
 
     print(model.tti_lambda_off)
     print(model.tti_lambda_def)
