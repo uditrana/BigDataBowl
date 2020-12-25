@@ -49,6 +49,41 @@ pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team'])
 out_dir_path = '../output/{}'  #for cloud runs
 # out_dir_path = '/mnt/c/Users/uditr/OneDrive/Projects/BigDataBowl/output/{}'  #for local runs
 
+# rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
+
+import joblib
+import xgboost as xgb
+import treelite_runtime
+
+import treelite
+
+bst = joblib.load("./in/xyac_model.model")
+xgb.plot_importance(bst)
+scores = bst.get_score(importance_type='gain')
+print(scores.keys())
+cols_when_model_builds = bst.feature_names
+
+
+
+model = treelite.Model.from_xgboost(bst)
+toolchain = 'gcc'
+model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel-copy2.so', 
+                 params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
+
+bst = joblib.load("./in/epa_model_rishav_no_time.model")
+xgb.plot_importance(bst)
+scores = bst.get_score(importance_type='gain')
+print(scores.keys())
+cols_when_model_builds = bst.feature_names
+
+
+
+model = treelite.Model.from_xgboost(bst)
+toolchain = 'gcc'
+model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel-copy2.so',
+                 params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
+
+
 
 params = lambda: None # create an empty object to add params
 params.a_max = 7
@@ -83,10 +118,10 @@ t_min, t_max = 10, 63
 #epa/xyac model loading
 bst = joblib.load("./in/xyac_model.model")
 cols_when_model_builds = bst.feature_names
-xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel.so')
+xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel-copy2.so')
 epa_model = joblib.load("./in/epa_model_rishav_no_time.model")
 cols_when_model_builds_ep = epa_model.feature_names
-epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel.so')
+epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel-copy2.so')
 
 def play_eppa(game_id, play_id, viz_df=True, save_np=False):
     play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by = 'frameId')
@@ -163,6 +198,12 @@ def play_eppa(game_id, play_id, viz_df=True, save_np=False):
     # input: tracking data for a single frame
     # output: frame_eppa (F, T)... (writes intermediate F,T to disk)
     def frame_eppa(frame_id):
+        week = games_df.loc[games_df.gameId==game_id].week.to_numpy()[0].item()
+        dir = out_dir_path.format(f'{week}/{game_id}/{play_id}')
+        if save_np:
+            if os.path.exists(f'{dir}/{frame_id}.npz'):
+                print(f'already exists: {dir}/{frame_id}.npz')
+                return pd.DataFrame()
         frame_df = play_df.loc[play_df.frameId==frame_id].reset_index()
         
         # per frame shared calcs
@@ -500,8 +541,6 @@ def play_eppa(game_id, play_id, viz_df=True, save_np=False):
         eppa_ind = ppc_ind*trans_prob[:, :, None]*xepa[:, :, None]
         
         if save_np:
-            week = games_df.loc[games_df.gameId==game_id].week.to_numpy()[0].item()
-            dir = out_dir_path.format(f'{week}/{game_id}/{play_id}')
             Path(dir).mkdir(parents=True, exist_ok=True)
             # np.savez_compressed(f'{dir}/{frame_id}', players_ind_info=ind_info,
             #                     ppc_ind=ppc_ind, h_trans=h_trans_prob, xepa=xepa, eppa_ind=eppa_ind)
@@ -555,8 +594,8 @@ def play_eppa(game_id, play_id, viz_df=True, save_np=False):
 
 plays = sorted(list(set(map(lambda x: (x[0].item(), x[1].item()), track_df.groupby(
     ['gameId', 'playId'], as_index=False).first()[['gameId', 'playId']].to_numpy()))))
-
-for (gid, pid) in tqdm(plays):
+import random
+for (gid, pid) in tqdm(random.sample(plays, len(plays))):
     print(gid, pid)
     try:
         play_eppa(gid, pid, viz_df=False, save_np=True)
