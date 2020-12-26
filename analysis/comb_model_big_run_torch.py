@@ -227,66 +227,67 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         frame_df['x_r'] = frame_df.x + frame_df.v_x*params.reax_t + 0.5*frame_df.a_x*params.reax_t**2
         frame_df['y_r'] = frame_df.y + frame_df.v_y*params.reax_t + 0.5*frame_df.a_y*params.reax_t**2
 
-        player_teams = torchify(frame_df['team_pos'].to_numpy())  # J,
-        player_team_names = torchify(frame_df['teamAbbr'].to_numpy())  # J,
-        player_ids = torchify(frame_df['nflId'].to_numpy())
-        player_names = torchify(frame_df['displayName'].to_numpy())
-        reaction_player_locs = torchify(frame_df[['x_r', 'y_r']].to_numpy(dtype=dt))  # (J, 2)
-        reaction_player_vels = torchify(frame_df[['v_x_r', 'v_y_r']].to_numpy(dtype=dt))  # (J,2)
+        player_teams = frame_df['team_pos'].to_numpy()  # J,
+        player_team_names = frame_df['teamAbbr'].to_numpy()  # J,
+        player_ids = frame_df['nflId'].to_numpy()
+        player_names = frame_df['displayName'].to_numpy()
+        reaction_player_locs = frame_df[['x_r', 'y_r']].to_numpy(dtype=dt)  # (J, 2)
+        reaction_player_vels = frame_df[['v_x_r', 'v_y_r']].to_numpy(dtype=dt)  # (J,2)
+
+        player_off_torch = torchify(player_teams == 'OFF')  # J,
+        reaction_player_locs_torch = torchify(reaction_player_locs)  # (J, 2)
+        reaction_player_vels_torch = torchify(reaction_player_vels)  # (J,2)
 
         # intercept vector between each player and field location
-        int_d_vec = field_locs_torch[:, None, :] - reaction_player_locs  # F, J, 2
-        int_d_mag = torch.linalg.norm(int_d_vec, dim=2)  # F, J
-        int_d_theta = torch.atan2(int_d_vec[..., 1], int_d_vec[..., 0])
+        int_d_vec = field_locs[:, None, :] - reaction_player_locs  # F, J, 2
+        int_d_mag = np.linalg.norm(int_d_vec, axis=2)  # F, J
+        int_d_theta = np.arctan2(int_d_vec[..., 1], int_d_vec[..., 0])
         # projecting player velocity on d_vec to get initial speed along d_vec
-        int_s0 = torch.clip(torch.sum(int_d_vec*reaction_player_vels, dim=2)/int_d_mag, -params.s_max, params.s_max)  # F, J,
+        int_s0 = np.clip(np.sum(int_d_vec*reaction_player_vels, axis=2)/int_d_mag, -params.s_max, params.s_max)  # F, J,
 
         # calculate time to int to ball loc on d_vec based on phys model
         t_lt_smax = (params.s_max-int_s0)/params.a_max  # F, J,
         d_lt_smax = t_lt_smax*((int_s0+params.s_max)/2)  # F, J,
         # if accelerating would overshoot, then t = -v0/a + sqrt(v0^2/a^2 + 2x/a) (from kinematics)
-        t_lt_smax = torch.where(d_lt_smax > int_d_mag, -int_s0/params.a_max+torch.sqrt((int_s0/params.a_max)
+        t_lt_smax = np.where(d_lt_smax > int_d_mag, -int_s0/params.a_max+np.sqrt((int_s0/params.a_max)
                                                                                  ** 2+2*int_d_mag/params.a_max), t_lt_smax)
-        d_lt_smax = torch.clip(d_lt_smax, 0, int_d_mag)
+        d_lt_smax = np.clip(d_lt_smax, 0, int_d_mag)
         d_at_smax = int_d_mag - d_lt_smax  # F, J,
         t_at_smax = d_at_smax/params.s_max  # F, J,
         t_tot = t_lt_smax+t_at_smax+params.reax_t  # F, J,
 
         # int success if T-t_tot = dT <  0. Put through sigmoid to add temporal uncertainty around
         int_dT = T[None, :, None] - t_tot[:, None, :]  # F, T, J
-        p_int = torch.sigmoid((3.1415 / (1.7321 * params.tti_sigma)) * int_dT)  # F, T, J
-        # TODO SS
+        p_int = (1/(1. + np.exp(-np.pi/np.sqrt(3.0)/params.tti_sigma * int_dT, dtype=dt)))  # F, T, J
+        p_int_torch = torchify(p_int)
+
         # projected locations at T (F, T, J)
-        d_proj = torch.where(
-            T[None, :, None] <= params.reax_t, 0,
-            torch.where(
-                T[None, :, None] <= (t_lt_smax + params.reax_t)[:, None, :],
-                (int_s0[:, None, :] * (T[None, :, None]-params.reax_t))+0.5*params.a_max*(T[None, :, None]-params.reax_t)**2,
-                torch.where(
-                    T[None, :, None] <= (t_lt_smax + t_at_smax + params.reax_t)[:, None, :],
-                    d_lt_smax[:, None, :] + d_at_smax[:, None, :] * torch.true_divide(
-                        (T[None, :, None] - t_lt_smax[:, None, :] - params.reax_t),
-                        t_at_smax[:, None, :]),
-                    int_d_mag[:, None, :]
-                )
-            )
-        )
+        d_proj = np.select(
+            [T[None, :, None] <= params.reax_t, T[None, :, None] <= (t_lt_smax + params.reax_t)[:, None, :],
+             T[None, :, None] <= (t_lt_smax + t_at_smax + params.reax_t)[:, None, :],
+             True],
+            [0, (int_s0[:, None, :] * (T[None, :, None]-params.reax_t))+0.5*params.a_max*(T[None, :, None]-params.reax_t)**2,
+             d_lt_smax[:, None, :] + d_at_smax[:, None, :] * np.true_divide(
+                 (T[None, :, None] - t_lt_smax[:, None, :] - params.reax_t),
+                 t_at_smax[:, None, :],
+                 out=np.zeros_like(int_dT),
+                 where=t_at_smax[:, None, :] != 0),
+             int_d_mag[:, None, :]])
         d_proj = np.clip(d_proj, 0, int_d_mag[:, None, :])  # no player is going to purposefully overshoot
-        s_proj = torch.where(
-            T[None, :, None] <= params.reax_t,
-            int_s0[:, None, :],
-            torch.where(
-                T[None, :, None] <= (t_lt_smax + params.reax_t)[:, None, :],
-                int_s0[:, None, :] + params.a_max * (T[None, :, None] - params.reax_t),
-                params.s_max
-            )
-        )
 
-        x_proj = reaction_player_locs[None, None, :, 0] + d_proj*torch.cos(int_d_theta[:, None, :])  # (F, T, J)
-        y_proj = reaction_player_locs[None, None, :, 1] + d_proj*torch.sin(int_d_theta[:, None, :])  # (F, T, J)
+        s_proj = np.select(
+            [T[None, :, None] <= params.reax_t, T[None, :, None] <= (t_lt_smax + params.reax_t)[:, None, :],
+             T[None, :, None] <= (t_lt_smax + t_at_smax + params.reax_t)[:, None, :],
+             True],
+            [int_s0[:, None, :],
+             int_s0[:, None, :] + params.a_max * (T[None, :, None] - params.reax_t),
+             params.s_max, params.s_max])
 
-        v_x_proj = s_proj*torch.cos(int_d_theta[:, None, :])  # (F, T, J)
-        v_y_proj = s_proj*torch.sin(int_d_theta[:, None, :])   # (F, T, J)
+        x_proj = reaction_player_locs[None, None, :, 0] + d_proj*np.cos(int_d_theta[:, None, :])  # (F, T, J)
+        y_proj = reaction_player_locs[None, None, :, 1] + d_proj*np.sin(int_d_theta[:, None, :])  # (F, T, J)
+
+        v_x_proj = s_proj*np.cos(int_d_theta[:, None, :])  # (F, T, J)
+        v_y_proj = s_proj*np.sin(int_d_theta[:, None, :])   # (F, T, J)
 
         proj_df = pd.DataFrame()
         if viz_true_proj:
@@ -373,21 +374,22 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             traj_locs_z = 2.0+vz_0[None, :, None]*traj_ts-0.5*g*traj_ts*traj_ts  # F, T, T
             path_idxs = (traj_locs_y_idx * xx.shape[1] + traj_locs_x_idx).flatten()  # (F*T*T,)
             traj_t_idxs = torch.round(10*traj_ts - 1).flatten().long()  # (F, T, T)
-            p_int_traj = p_int[path_idxs, traj_t_idxs]  # F*T*T, J
+            p_int_traj = p_int_torch[path_idxs, traj_t_idxs]  # F*T*T, J
             p_int_traj = p_int_traj.reshape((*traj_locs_x_idx.shape, len(reaction_player_locs)))  # F, T, T, J
 
             # account for ball height on traj and normalize each locations int probability
             lambda_z = torch.where((traj_locs_z < params.z_max) & (traj_locs_z > params.z_min),
                                 1, 0)  # F, T, T # maybe change this to a normal distribution
             p_int_traj = p_int_traj * lambda_z[:, :, :, None]
-            norm_factor = torch.maximum(1., p_int_traj.sum(dim=-1))  # F, T, T
+            p_int_traj_sum = p_int_traj.sum(dim=-1)
+            norm_factor = torch.maximum(torch.ones_like(p_int_traj_sum).float(), p_int_traj_sum)  # F, T, T
             p_int_traj_norm = (p_int_traj/norm_factor[..., None])  # F, T, T, J
 
             # independent int probs at each point on trajectory
-            all_p_int_traj = torch.sum(p_int_traj_norm, dim=-1)  # B, F, T, T
-            off_p_int_traj = torch.sum((player_teams == 'OFF')[:,None,None,None] * p_int_traj_norm, dim=-1)  # B, F, T, T
-            def_p_int_traj = torch.sum((player_teams == 'DEF')[:,None,None,None] * p_int_traj_norm, dim=-1)  # B, F, T, T
-            ind_p_int_traj = p_int_traj_norm #use for analyzing specific players; # B, F, T, T, J
+            all_p_int_traj = torch.sum(p_int_traj_norm, dim=-1)  # F, T, T
+            off_p_int_traj = torch.sum(player_off_torch[None,None,None] * p_int_traj_norm, dim=-1)  # F, T, T
+            def_p_int_traj = torch.sum(np.logical_not(player_off_torch)[None,None,None] * p_int_traj_norm, dim=-1)  # F, T, T
+            ind_p_int_traj = p_int_traj_norm #use for analyzing specific players; # F, T, T, J
 
             # calc decaying residual probs after you take away p_int on earlier times in the traj
             compl_all_p_int_traj = 1-all_p_int_traj  # F, T, T
