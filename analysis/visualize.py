@@ -116,7 +116,7 @@ class AnimatePlay:
 
         plt.close()
 
-    @staticmethod
+    @ staticmethod
     def set_axis_plots(ax, max_x, max_y) -> None:
         ax.xaxis.set_visible(False)
         ax.yaxis.set_visible(False)
@@ -124,15 +124,15 @@ class AnimatePlay:
         ax.set_xlim([0, max_x])
         ax.set_ylim([0, max_y])
 
-    @staticmethod
+    @ staticmethod
     def convert_orientation(x):
         return (-x + 90) % 360
 
-    @staticmethod
+    @ staticmethod
     def polar_to_z(r, theta):
         return r * np.exp(1j * theta)
 
-    @staticmethod
+    @ staticmethod
     def deg_to_rad(deg):
         return deg*np.pi/180
 
@@ -178,14 +178,36 @@ class AnimatePlay:
             [],
             s=500, color=self._offense_colors[0],
             edgecolors=self._offense_colors[1])
+        self._scat_offense_proj = self._ax_offense.scatter(
+            [],
+            [],
+            s=300, color=self._offense_colors[0], alpha=0.5, marker='x',
+            edgecolors=self._offense_colors[1])
+        # self._scat_offense_reax = self._ax_offense.scatter(
+        #     [],
+        #     [],
+        #     s=100, color=self._offense_colors[0], alpha=0.5, marker='*',
+        #     edgecolors=self._offense_colors[1])
         self._scat_defense = self._ax_defense.scatter(
             [],
             [],
             s=500, color=self._defense_colors[0],
             edgecolors=self._defense_colors[1])
+        self._scat_defense_proj = self._ax_defense.scatter(
+            [],
+            [],
+            s=300, color=self._defense_colors[0], alpha=0.5, marker='x',
+            edgecolors=self._defense_colors[1])
+        # self._scat_defense_reax = self._ax_defense.scatter(
+        #     [],
+        #     [],
+        #     s=100, color=self._defense_colors[0], alpha=0.5, marker='*',
+        #     edgecolors=self._defense_colors[1])
 
         self._scat_jersey_list = []
         self._scat_number_list = []
+        self._scat_number_proj_list = []
+        # self._scat_number_reax_list = []
         self._scat_name_list = []
         self._vel_list = []
         self._acc_list = []
@@ -194,6 +216,10 @@ class AnimatePlay:
                 0, 0, '', horizontalalignment='center', verticalalignment='center', c='white'))
             self._scat_number_list.append(self._ax_jersey.text(
                 0, 0, '', horizontalalignment='center', verticalalignment='center', c='black'))
+            self._scat_number_proj_list.append(self._ax_jersey.text(
+                0, 0, '', horizontalalignment='center', verticalalignment='center', c='black'))
+            # self._scat_number_reax_list.append(self._ax_jersey.text(
+            #     0, 0, '', horizontalalignment='center', verticalalignment='center', c='black'))
             self._scat_name_list.append(self._ax_jersey.text(
                 0, 0, '', horizontalalignment='center', verticalalignment='center', c='black'))
 
@@ -224,8 +250,16 @@ class AnimatePlay:
                     np.vstack([[self._pass_arrival_loc[0], label_data.x], [self._pass_arrival_loc[1], label_data.y]]).T)
             elif label == 'OFF':
                 self._scat_offense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
+                self._scat_offense_proj.set_offsets(
+                    np.vstack([label_data.proj_x.fillna(-10), label_data.proj_y.fillna(-10)]).T)
+                # self._scat_offense_reax.set_offsets(
+                #     np.vstack([label_data.reax_x.fillna(-10), label_data.reax_y.fillna(-10)]).T)
             elif label == 'DEF':
                 self._scat_defense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
+                self._scat_defense_proj.set_offsets(
+                    np.vstack([label_data.proj_x.fillna(-10), label_data.proj_y.fillna(-10)]).T)
+                # self._scat_defense_reax.set_offsets(
+                #     np.vstack([label_data.reax_x.fillna(-10), label_data.reax_y.fillna(-10)]).T)
 
         # jersey_df = pos_df[pos_df.jerseyNumber.notnull()]
 
@@ -257,10 +291,14 @@ class AnimatePlay:
             #     self._scat_field_pmass2.set_offsets()
 
         for (index, row) in pos_df[pos_df.jerseyNumber.notnull()].reset_index().iterrows():
+            row = row.fillna(-10)
             self._scat_jersey_list[index].set_position((row.x, row.y))
             self._scat_jersey_list[index].set_text(row.position)
             self._scat_number_list[index].set_position((row.x, row.y+1.9))
             self._scat_number_list[index].set_text(int(row.jerseyNumber))
+            self._scat_number_proj_list[index].set_position((row.proj_x, row.proj_y+1.9))
+            self._scat_number_proj_list[index].set_text(int(row.jerseyNumber))
+
             self._scat_name_list[index].set_position((row.x, row.y-1.9))
             self._scat_name_list[index].set_text(row.displayName.split()[-1])
 
