@@ -1,4 +1,3 @@
-import os
 import treelite
 import random
 import treelite_runtime
@@ -8,6 +7,7 @@ from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
+import torch
 from pathlib import Path
 
 # file loading and prep
@@ -41,25 +41,25 @@ pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team'])
 out_dir_path = '../output/{}'  # for cloud runs
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
-bst = joblib.load("./in/xyac_model.model")
-xgb.plot_importance(bst)
-scores = bst.get_score(importance_type='gain')
-print(scores.keys())
-cols_when_model_builds = bst.feature_names
-model = treelite.Model.from_xgboost(bst)
-toolchain = 'gcc'
-model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
-                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+# bst = joblib.load("./in/xyac_model.model")
+# xgb.plot_importance(bst)
+# scores = bst.get_score(importance_type='gain')
+# print(scores.keys())
+# cols_when_model_builds = bst.feature_names
+# model = treelite.Model.from_xgboost(bst)
+# toolchain = 'gcc'
+# model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
+#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
-bst = joblib.load("./in/epa_model_rishav_no_time.model")
-xgb.plot_importance(bst)
-scores = bst.get_score(importance_type='gain')
-print(scores.keys())
-cols_when_model_builds = bst.feature_names
-model = treelite.Model.from_xgboost(bst)
-toolchain = 'gcc'
-model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
-                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+# bst = joblib.load("./in/epa_model_rishav_no_time.model")
+# xgb.plot_importance(bst)
+# scores = bst.get_score(importance_type='gain')
+# print(scores.keys())
+# cols_when_model_builds = bst.feature_names
+# model = treelite.Model.from_xgboost(bst)
+# toolchain = 'gcc'
+# model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
+#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
 
 def params(): return None  # create an empty object to add params
@@ -78,6 +78,11 @@ params.z_max = 3
 vars(params)
 
 dt = np.float64
+dt_torch = torch.float64
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def torchify(np_arr):
+    return torch.from_numpy(np_arr).to(device)
 
 # model constants
 T = np.linspace(0.1, 4, 40, dtype=dt)
@@ -88,6 +93,11 @@ xx, yy = np.meshgrid(x, y)
 field_locs = np.stack((xx, yy)).reshape(2, -1).T  # (F, 2)
 tot_pass_cnt = len(field_locs[:, 1])*len(T)
 print(f'Considering {tot_pass_cnt} passes per frame')
+T_torch = torchify(T)
+xx_torch = torchify(xx)
+yy_torch = torchify(yy)
+field_locs_torch = torchify(field_locs)
+
 
 # historical trans model inputs/params
 L_given_ts = np.load('in/L_given_t.npy')
@@ -200,10 +210,12 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
         frame_df = play_df.loc[play_df.frameId == frame_id].reset_index()
         ball_start = frame_df.loc[frame_df.position == 'QB', ['x', 'y']].iloc[0].to_numpy(dtype=dt)
+        ball_start_torch = torchify(ball_start)
         t = frame_df.frames_since_snap.iloc[0]
         frame_df = frame_df.loc[(frame_df.nflId != 0) & (frame_df.position != 'QB')]  # remove ball and qb from df
 
         reach_vecs = (field_locs - ball_start).astype(dt)  # (F, 2)
+        reach_vecs_torch = torchify(reach_vecs)
 
         frame_df = frame_df.drop_duplicates(subset='nflId').sort_values('nflId').reset_index()
 
@@ -221,6 +233,10 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         player_names = frame_df['displayName'].to_numpy()
         reaction_player_locs = frame_df[['x_r', 'y_r']].to_numpy(dtype=dt)  # (J, 2)
         reaction_player_vels = frame_df[['v_x_r', 'v_y_r']].to_numpy(dtype=dt)  # (J,2)
+
+        player_off_torch = torchify(player_teams == 'OFF')  # J,
+        reaction_player_locs_torch = torchify(reaction_player_locs)  # (J, 2)
+        reaction_player_vels_torch = torchify(reaction_player_vels)  # (J,2)
 
         # intercept vector between each player and field location
         int_d_vec = field_locs[:, None, :] - reaction_player_locs  # F, J, 2
@@ -243,6 +259,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         # int success if T-t_tot = dT <  0. Put through sigmoid to add temporal uncertainty around
         int_dT = T[None, :, None] - t_tot[:, None, :]  # F, T, J
         p_int = (1/(1. + np.exp(-np.pi/np.sqrt(3.0)/params.tti_sigma * int_dT, dtype=dt)))  # F, T, J
+        p_int_torch = torchify(p_int)
 
         # projected locations at T (F, T, J)
         d_proj = np.select(
@@ -344,42 +361,41 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
             # trajectory integration
             g = 10.72468  # y/s/s
-            dx = reach_vecs[:, 0]  # F
-            dy = reach_vecs[:, 1]  # F
-            vx = dx[:, None]/T[None, :]  # F, T
-            vy = dy[:, None]/T[None, :]  # F, T
-            vz_0 = (T*g)/2  # T
+            dx = reach_vecs_torch[:, 0]  # F
+            dy = reach_vecs_torch[:, 1]  # F
+            vx = dx[:, None]/T_torch[None, :]  # F, T
+            vy = dy[:, None]/T_torch[None, :]  # F, T
+            vz_0 = (T_torch*g)/2  # T
 
             # note that idx (i, j, k) into below arrays is invalid when j < k
-            traj_ts = np.tile(T, (len(field_locs), len(T), 1))  # (F, T, T)
-            traj_locs_x_idx = np.rint(np.clip((ball_start[0]+vx[:, :, None]*T), 0, len(x)-1)).astype(int)  # F, T, T
-            traj_locs_y_idx = np.rint(np.clip((ball_start[1]+vy[:, :, None]*T), 0, len(y)-1)).astype(int)  # F, T, T
+            traj_ts = T_torch.repeat(field_locs_torch.shape[0], T_torch.shape[0], 1)  # (F, T, T)
+            traj_locs_x_idx = torch.round(torch.clip((ball_start_torch[0]+vx[:, :, None]*T_torch), 0, len(x)-1)).long()  # F, T, T
+            traj_locs_y_idx = torch.round(torch.clip((ball_start_torch[1]+vy[:, :, None]*T_torch), 0, len(y)-1)).long()  # F, T, T
             traj_locs_z = 2.0+vz_0[None, :, None]*traj_ts-0.5*g*traj_ts*traj_ts  # F, T, T
-            path_idxs = np.ravel_multi_index(
-                np.stack((traj_locs_y_idx, traj_locs_x_idx)).reshape(2, -1),
-                xx.shape)  # (F*T*T,)
-            traj_t_idxs = np.rint(10*traj_ts - 1).flatten().astype(int)  # (F, T, T)
-            p_int_traj = p_int[path_idxs, traj_t_idxs]  # F*T*T, J
+            path_idxs = (traj_locs_y_idx * xx.shape[1] + traj_locs_x_idx).flatten()  # (F*T*T,)
+            traj_t_idxs = torch.round(10*traj_ts - 1).flatten().long()  # (F, T, T)
+            p_int_traj = p_int_torch[path_idxs, traj_t_idxs]  # F*T*T, J
             p_int_traj = p_int_traj.reshape((*traj_locs_x_idx.shape, len(reaction_player_locs)))  # F, T, T, J
 
             # account for ball height on traj and normalize each locations int probability
-            lambda_z = np.where((traj_locs_z < params.z_max) & (traj_locs_z > params.z_min),
+            lambda_z = torch.where((traj_locs_z < params.z_max) & (traj_locs_z > params.z_min),
                                 1, 0)  # F, T, T # maybe change this to a normal distribution
             p_int_traj = p_int_traj * lambda_z[:, :, :, None]
-            norm_factor = np.maximum(1., p_int_traj.sum(axis=-1))  # F, T, T
+            p_int_traj_sum = p_int_traj.sum(dim=-1)
+            norm_factor = torch.maximum(torch.ones_like(p_int_traj_sum).float(), p_int_traj_sum)  # F, T, T
             p_int_traj_norm = (p_int_traj/norm_factor[..., None])  # F, T, T, J
 
             # independent int probs at each point on trajectory
-            all_p_int_traj = np.sum(p_int_traj_norm, axis=-1)  # F, T, T
-            off_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'OFF'))
-            def_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'DEF'))
-            ind_p_int_traj = p_int_traj_norm  # use for analyzing specific players
+            all_p_int_traj = torch.sum(p_int_traj_norm, dim=-1)  # F, T, T
+            off_p_int_traj = torch.sum(player_off_torch[None,None,None] * p_int_traj_norm, dim=-1)  # F, T, T
+            def_p_int_traj = torch.sum(np.logical_not(player_off_torch)[None,None,None] * p_int_traj_norm, dim=-1)  # F, T, T
+            ind_p_int_traj = p_int_traj_norm #use for analyzing specific players; # F, T, T, J
 
             # calc decaying residual probs after you take away p_int on earlier times in the traj
             compl_all_p_int_traj = 1-all_p_int_traj  # F, T, T
-            remaining_compl_p_int_traj = np.cumprod(compl_all_p_int_traj, axis=-1)  # F, T, T
+            remaining_compl_p_int_traj = torch.cumprod(compl_all_p_int_traj, dim=-1)  # F, T, T
             # maximum 0 because if it goes negative the pass has been caught by then and theres no residual probability
-            shift_compl_cumsum = np.roll(remaining_compl_p_int_traj, 1, axis=-1)  # F, T, T
+            shift_compl_cumsum = torch.roll(remaining_compl_p_int_traj, 1, dims=-1)  # F, T, T
             shift_compl_cumsum[:, :, 0] = 1
 
             # multiply residual prob by p_int at that location
@@ -389,10 +405,10 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             ind_completion_prob_dt = shift_compl_cumsum[:, :, :, None] * ind_p_int_traj  # F, T, T, J
 
             # now accumulate values over total traj for each team and take at T=t
-            # all_completion_prob = np.cumsum(all_completion_prob_dt, axis=-1)  # F, T, T
-            off_completion_prob = np.cumsum(off_completion_prob_dt, axis=-1)  # F, T, T
-            def_completion_prob = np.cumsum(def_completion_prob_dt, axis=-1)  # F, T, T
-            ind_completion_prob = np.cumsum(ind_completion_prob_dt, axis=-2)  # F, T, T, J
+            # all_completion_prob = torch.cumsum(all_completion_prob_dt, dim=-1)  # F, T, T
+            off_completion_prob = torch.cumsum(off_completion_prob_dt, dim=-1)  # F, T, T
+            def_completion_prob = torch.cumsum(def_completion_prob_dt, dim=-1)  # F, T, T
+            ind_completion_prob = torch.cumsum(ind_completion_prob_dt, dim=-2)  # F, T, T, J
 
             #     #### Toy example
             # all_p_int_traj = [0, 0, 0.1, 0.2, 0.8, 0.8]
@@ -404,9 +420,9 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             # this einsum takes the diagonal values over the last two axes where T = t
             # this takes care of the t > T issue.
             # all_p_int_pass = np.einsum('ijj->ij', all_completion_prob)  # F, T
-            off_p_int_pass = np.einsum('ijj->ij', off_completion_prob)  # F, T
-            def_p_int_pass = np.einsum('ijj->ij', def_completion_prob)  # F, T
-            ind_p_int_pass = np.einsum('ijjk->ijk', ind_completion_prob)  # F, T, J
+            off_p_int_pass = torch.einsum('ijj->ij', off_completion_prob)  # F, T
+            def_p_int_pass = torch.einsum('ijj->ij', def_completion_prob)  # F, T
+            ind_p_int_pass = torch.einsum('ijjk->ijk', ind_completion_prob)  # F, T, J
             # no_p_int_pass = 1-all_p_int_pass #F, T
 
             # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
@@ -490,6 +506,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         nonlocal epa_df
 
         ppc_off, ppc_def, ppc_ind = get_ppc()  # (F, T), (F, T), (F, T, J)
+        ppc_off, ppc_def, ppc_ind = ppc_off.detach().numpy(), ppc_def.detach().numpy(), ppc_ind.detach().numpy()
         ind_info = np.stack((player_ids, player_teams), axis=1)
         h_trans_prob = get_hist_trans_prob()
 
@@ -627,12 +644,6 @@ plays = sorted(list(set(map(lambda x: (x[0].item(), x[1].item()), track_df.group
     ['gameId', 'playId'], as_index=False).first()[['gameId', 'playId']].to_numpy()))))
 
 # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
-for (gid, pid) in tqdm(plays):
-    dir = out_dir_path.format(f'1/{gid}/{pid}')
-    if os.path.exists(dir):
-        print(f'EXISTS: {gid}, {pid}')
-    else:
-        try:
-            play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=True)
-        except Exception as e:
-            print(f"ERROR: {gid}, {pid}. e={e}")
+for (gid, pid) in tqdm(plays[:3]):
+    print(gid, pid)
+    play_eppa(gid, pid, viz_df=True, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=True)
