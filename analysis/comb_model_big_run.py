@@ -65,14 +65,14 @@ model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
 def params(): return None  # create an empty object to add params
 
 
-params.a_max = 7
-params.s_max = 9
+params.a_max = 7.25
+params.s_max = 9.25
 # params.reax_t = params.s_max/params.a_max
 params.reax_t = 0.2
-params.tti_sigma = 0.318
+params.tti_sigma = 0.72
 # params.tti_sigma = 0.45
 params.cell_length = 1
-params.alpha = 1.5
+params.alpha = 1.0
 params.z_min = 1
 params.z_max = 3
 vars(params)
