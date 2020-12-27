@@ -1,3 +1,4 @@
+import os
 import treelite
 import random
 import treelite_runtime
@@ -40,25 +41,25 @@ pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team'])
 out_dir_path = '../output/{}'  # for cloud runs
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
-# bst = joblib.load("./in/xyac_model.model")
-# xgb.plot_importance(bst)
-# scores = bst.get_score(importance_type='gain')
-# print(scores.keys())
-# cols_when_model_builds = bst.feature_names
-# model = treelite.Model.from_xgboost(bst)
-# toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
-#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+bst = joblib.load("./in/xyac_model.model")
+xgb.plot_importance(bst)
+scores = bst.get_score(importance_type='gain')
+print(scores.keys())
+cols_when_model_builds = bst.feature_names
+model = treelite.Model.from_xgboost(bst)
+toolchain = 'gcc'
+model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
+                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
-# bst = joblib.load("./in/epa_model_rishav_no_time.model")
-# xgb.plot_importance(bst)
-# scores = bst.get_score(importance_type='gain')
-# print(scores.keys())
-# cols_when_model_builds = bst.feature_names
-# model = treelite.Model.from_xgboost(bst)
-# toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
-#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+bst = joblib.load("./in/epa_model_rishav_no_time.model")
+xgb.plot_importance(bst)
+scores = bst.get_score(importance_type='gain')
+print(scores.keys())
+cols_when_model_builds = bst.feature_names
+model = treelite.Model.from_xgboost(bst)
+toolchain = 'gcc'
+model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
+                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
 
 def params(): return None  # create an empty object to add params
@@ -626,6 +627,12 @@ plays = sorted(list(set(map(lambda x: (x[0].item(), x[1].item()), track_df.group
     ['gameId', 'playId'], as_index=False).first()[['gameId', 'playId']].to_numpy()))))
 
 # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
-for (gid, pid) in tqdm(plays[:3]):
-    print(gid, pid)
-    play_eppa(gid, pid, viz_df=True, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=True)
+for (gid, pid) in tqdm(plays):
+    dir = out_dir_path.format(f'1/{gid}/{pid}')
+    if os.path.exists(dir):
+        print(f'EXISTS: {gid}, {pid}')
+    else:
+        try:
+            play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=True)
+        except Exception as e:
+            print(f"ERROR: {gid}, {pid}. e={e}")
