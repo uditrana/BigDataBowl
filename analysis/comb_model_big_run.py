@@ -11,7 +11,7 @@ import pandas as pd
 from pathlib import Path
 
 # file loading and prep
-path_shared = '~/Downloads/nfl-big-data-bowl-2021/{}'
+path_shared = '../data/{}'
 
 games_df = pd.read_csv(path_shared.format('games.csv'))
 plays_df = pd.read_csv(path_shared.format('plays.csv'))
@@ -101,11 +101,11 @@ t_min, t_max = 10, 63
 bst = joblib.load("./in/xyac_model.model")
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
-xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel.dylib')
+xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel.so')
 epa_model = joblib.load("./in/epa_model_rishav_no_time.model")
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
-epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel.dylib')
+epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel.so')
 
 
 def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False):
