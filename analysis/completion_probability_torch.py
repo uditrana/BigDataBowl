@@ -20,8 +20,6 @@ class PlaysDataset(torch.utils.data.Dataset):
         # time code TODO(adit98) remove this later
         self.tuning = tuning
 
-        # event_filter should be 'pass_forward' for sigma, 'pass_arrived' for lambda
-        self.event_filter = event_filter
         if all_weeks:
             all_data = []
             for week in range(5, 10):
@@ -68,6 +66,7 @@ class PlaysDataset(torch.utils.data.Dataset):
         play_list_grouped = play_list.groupby(['gameId', 'playId'])
         play_list['forward_frameId'] = play_list_grouped.forward_frameId.transform('mean')
         play_list['arrived_frameId'] = play_list_grouped.arrived_frameId.transform('mean')
+        play_list['tof'] = np.clip(play_list['arrived_frameId'] - play_list['forward_frameId'], 0, 40)
         play_list = play_list.drop_duplicates()
 
         if self.tuning == TuningParam.sigma:
@@ -89,20 +88,24 @@ class PlaysDataset(torch.utils.data.Dataset):
             close_to_ball = self.player_reached.groupby(['gameId', 'playId']).filter(lambda x: x.close_to_ball.sum() > 0)[['gameId',
                 'playId']].copy().drop_duplicates()
             tracking_df = close_to_ball.merge(tracking_df, on=['gameId', 'playId'])
+            self.player_reached = close_to_ball.merge(self.player_reached, on=['gameId', 'playId'])
             play_list = tracking_df[['gameId', 'playId']].copy()
 
             # TODO @SS I think this should be DEF here?
             # control is given by (player is on offense) XOR (ball is caught)
-            self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'OFF') ^ \
+            self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'DEF') ^ \
                     self.player_reached['event'].isin(['pass_outcome_caught', 'pass_outcome_touchdown'])).astype(int)
 
         # replace positions with ints
         self.player_reached = self.player_reached.replace('OFF', 1)
         self.player_reached = self.player_reached.replace('DEF', 0)
 
-        # replace positions with ints, and store tracking_df
+        # replace positions with ints
         tracking_df = tracking_df.replace('OFF', 1)
         tracking_df = tracking_df.replace('DEF', 0)
+
+        # calculate tracking_df/player_reached inds for each play
+        #event_ends = tracking_df.groupby(['gameId', 'playId', 'frameId'])
 
         # drop duplicate columns and store tracking_df
         self.player_reached = self.player_reached.drop(columns=['ball_end_x', 'ball_end_y'])
@@ -122,30 +125,26 @@ class PlaysDataset(torch.utils.data.Dataset):
         playId = self.play_list[idx, 1]
         forward_frameId = self.play_list[idx, 2]
         arrived_frameId = self.play_list[idx, 3]
+        tof = self.play_list[idx, 4]
+        # TODO(adit98) calculate play_start_ind, play_end_ind, remove gameId, playId
+        #play_start_ind = 
 
         # THIS MIGHT BE WHERE SLOWDOWN HAPPENS - try and use np style indexing instead
+        # frame = self.all_plays.iloc[play_start_ind:play_end_ind + 1]
         # load frame, sigma_label, and ball_end, only keep relevant frames
-        frame = self.all_plays.loc[(self.all_plays.gameId == gameId) & (self.all_plays.playId == playId) & \
-                ((self.all_plays.frameId == forward_frameId) | (self.all_plays.frameId == arrived_frameId))]
+        frame = self.all_plays.loc[(self.all_plays.gameId == gameId) & (self.all_plays.playId == playId) & (self.all_plays.frameId == forward_frameId)]
+        frame['tof'] = tof
 
         if self.tuning == TuningParam.lamb:
             sigma_lambda_label = self.player_reached.loc[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId) & \
-                (self.all_plays.frameId == arrived_frameId)][['nflId', 'close_to_ball', 'control_ball']].copy()
+                (self.player_reached.frameId == arrived_frameId)][['nflId', 'close_to_ball', 'control_ball']].copy()
         else:
             sigma_lambda_label = self.player_reached.loc[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId) & \
                     (self.all_plays.frameId == arrived_frameId)][['nflId', 'close_to_ball']].copy()
 
-        try:
-            frame['tof'] = np.clip(pd.to_timedelta(pd.to_datetime(frame[frame.event == 'pass_arrived'].time.iloc[0]) - \
-                    pd.to_datetime(frame[frame.event == 'pass_forward'].time.iloc[0])).total_seconds(), 0, 3.9)
-        except IndexError:
-            print(frame[frame.event == 'pass_arrived'])
-            print(frame[frame.event == 'pass_forward'])
-            raise IndexError
-
-        # this is used to pick which frame we want our PPCF to be calculated based off of
-        if self.event_filter is not None:
-            frame = frame[frame.event == self.event_filter]
+        ## this is used to pick which frame we want our PPCF to be calculated based off of
+        #if self.event_filter is not None:
+        #    frame = frame[frame.event == self.event_filter]
 
         # generate data, label, fill missing data
         if self.tuning == TuningParam.lamb:
@@ -157,7 +156,7 @@ class PlaysDataset(torch.utils.data.Dataset):
             data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
                 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
             label = torch.tensor(sigma_lambda_label['close_to_ball'].values)
-        
+
         if data.size(0) < self.max_num:
             data = torch.cat([data, torch.ones([self.max_num - data.size(0), data.size(1)])], dim=0)
             label = torch.cat([label, torch.zeros([self.max_num - label.size(0)])], dim=0)
@@ -196,7 +195,7 @@ class CompProbModel(torch.nn.Module):
         self.x = torch.linspace(0.5, 119.5, 120)
         self.y = torch.linspace(-0.5, 53.5, 55)
         self.y[0] = -0.2
-        self.xx, self.yy = torch.meshgrid(self.x, self.y)
+        self.yy, self.xx = torch.meshgrid(self.y, self.x)
         self.field_locs = Parameter(torch.flatten(torch.stack((self.xx, self.yy), dim=-1), end_dim=-2), requires_grad=False)  # (F, 2)
         self.T = Parameter(torch.linspace(0.1, 4, 40), requires_grad=False) # (T,)
 
@@ -220,32 +219,34 @@ class CompProbModel(torch.nn.Module):
         int_d_mag = torch.norm(int_d_vec, dim=-1) # F, J
         
         # take dot product of velocity and direction
-        int_s0 = torch.clamp(torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag, -1 * self.s_max.item(), self.s_max.item()) #F, J
-        #int_s0 = torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag
+        int_s0 = torch.clamp(torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag,
+                -1 * self.s_max.item(), self.s_max.item()) #F, J
         
         # calculate time it takes for each player to reach each field position accounting for their current velocity and acceleration
         t_lt_smax = (self.s_max - int_s0) / self.a_max  #F, J,
         d_lt_smax = t_lt_smax * ((int_s0 + self.s_max) / 2) #F, J,
+
+        # if accelerating would overshoot, then t = -v0/a + sqrt(v0^2/a^2 + 2x/a) (from kinematics)
+        t_lt_smax = torch.where(d_lt_smax > int_d_mag, -int_s0 / self.a_max + \
+                torch.sqrt((int_s0 / self.a_max) ** 2 + 2 * int_d_mag / self.a_max), t_lt_smax) # F, J
+        d_lt_smax = torch.max(torch.min(d_lt_smax, int_d_mag), torch.zeros_like(d_lt_smax)) # F, J
+
         d_at_smax = int_d_mag - d_lt_smax               #F, J,
         t_at_smax = d_at_smax / self.s_max              #F, J,
         t_tot = self.reax_t + t_lt_smax + t_at_smax     # F, J,
 
         # subtract the arrival time (t_tot) from time of flight of ball
         int_dT = self.T.view(1, 1, -1, 1) - t_tot.unsqueeze(2)         #F, T, J
-        #int_dT.register_hook(lambda x: print(x))
         
         # calculate interception probability for each player, field loc, time of flight (logistic function)
-        #p_int.register_hook(lambda x: print('before calculation', x))
-        #self.tti_sigma.register_hook(lambda x: print('tti_sigma before p_int', x.shape, x.mean()))
         p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) #F, T, J
-        #p_int.register_hook(lambda x: print('before tof ind', x.shape, (x != 0).sum(), x.sum()))
-        #self.tti_sigma.register_hook(lambda x: print('tti_sigma before tof', x))
 
-        # get true pass (tof and ball_end) to tune on
-        tof = torch.round(frame[:, 0, -1] * 10).long().view(-1, 1, 1, 1).repeat(1, p_int.size(1), 1, p_int.size(-1))
+        # get true pass (tof and ball_end) to tune on (subtract 1 from tof, add 1 to y for correct indexing)
+        tof = torch.round(frame[:, 0, -1]).long().view(-1, 1, 1, 1).repeat(1, p_int.size(1), 1, p_int.size(-1)) - 1
 
         ball_end_x = frame[:, 0, -3].int()
-        ball_end_y = frame[:, 0, -2].int()
+        ball_end_y = frame[:, 0, -2].int() + 1
+
         ball_field_ind = (ball_end_y * self.x.shape[0] + ball_end_x).long().view(-1, 1, 1).repeat(1, 1, p_int.size(-1))
 
         if self.tuning == TuningParam.sigma:
