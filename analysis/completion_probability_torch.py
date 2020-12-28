@@ -67,7 +67,7 @@ class PlaysDataset(torch.utils.data.Dataset):
         play_list_grouped = play_list.groupby(['gameId', 'playId'])
         play_list['forward_frameId'] = play_list_grouped.forward_frameId.transform('mean')
         play_list['arrived_frameId'] = play_list_grouped.arrived_frameId.transform('mean')
-        play_list['tof'] = np.clip(play_list['arrived_frameId'] - play_list['forward_frameId'], 0, 39)
+        play_list['tof'] = np.clip(play_list['arrived_frameId'] - play_list['forward_frameId'], 0, 40)
         play_list = play_list.drop_duplicates()
 
         if self.tuning == TuningParam.sigma:
@@ -222,9 +222,15 @@ class CompProbModel(torch.nn.Module):
         int_d_mag = torch.norm(int_d_vec, dim=-1) # F, J
 
         # take dot product of velocity and direction
+<<<<<<< HEAD
         int_s0 = torch.clamp(torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag, -1 * self.s_max.item(), self.s_max.item()) #F, J
         #int_s0 = torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag
 
+=======
+        int_s0 = torch.clamp(torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag,
+                -1 * self.s_max.item(), self.s_max.item()) #F, J
+        
+>>>>>>> d92f2f412e9c227fd80bbd27244af3a30f5da283
         # calculate time it takes for each player to reach each field position accounting for their current velocity and acceleration
         t_lt_smax = (self.s_max - int_s0) / self.a_max  #F, J,
         d_lt_smax = t_lt_smax * ((int_s0 + self.s_max) / 2) #F, J,
@@ -240,20 +246,21 @@ class CompProbModel(torch.nn.Module):
 
         # subtract the arrival time (t_tot) from time of flight of ball
         int_dT = self.T.view(1, 1, -1, 1) - t_tot.unsqueeze(2)         #F, T, J
+<<<<<<< HEAD
         #int_dT.register_hook(lambda x: print(x))
 
+=======
+        
+>>>>>>> d92f2f412e9c227fd80bbd27244af3a30f5da283
         # calculate interception probability for each player, field loc, time of flight (logistic function)
-        #p_int.register_hook(lambda x: print('before calculation', x))
-        #self.tti_sigma.register_hook(lambda x: print('tti_sigma before p_int', x.shape, x.mean()))
         p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) #F, T, J
-        #p_int.register_hook(lambda x: print('before tof ind', x.shape, (x != 0).sum(), x.sum()))
-        #self.tti_sigma.register_hook(lambda x: print('tti_sigma before tof', x))
 
-        # get true pass (tof and ball_end) to tune on
-        tof = torch.round(frame[:, 0, -1]).long().view(-1, 1, 1, 1).repeat(1, p_int.size(1), 1, p_int.size(-1))
+        # get true pass (tof and ball_end) to tune on (subtract 1 from tof, add 1 to y for correct indexing)
+        tof = torch.round(frame[:, 0, -1]).long().view(-1, 1, 1, 1).repeat(1, p_int.size(1), 1, p_int.size(-1)) - 1
 
         ball_end_x = frame[:, 0, -3].int()
-        ball_end_y = frame[:, 0, -2].int()
+        ball_end_y = frame[:, 0, -2].int() + 1
+
         ball_field_ind = (ball_end_y * self.x.shape[0] + ball_end_x).long().view(-1, 1, 1).repeat(1, 1, p_int.size(-1))
 
         if self.tuning == TuningParam.sigma:
