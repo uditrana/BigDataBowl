@@ -195,7 +195,7 @@ class CompProbModel(torch.nn.Module):
         self.x = torch.linspace(0.5, 119.5, 120)
         self.y = torch.linspace(-0.5, 53.5, 55)
         self.y[0] = -0.2
-        self.xx, self.yy = torch.meshgrid(self.x, self.y)
+        self.yy, self.xx = torch.meshgrid(self.y, self.x)
         self.field_locs = Parameter(torch.flatten(torch.stack((self.xx, self.yy), dim=-1), end_dim=-2), requires_grad=False)  # (F, 2)
         self.T = Parameter(torch.linspace(0.1, 4, 40), requires_grad=False) # (T,)
 
