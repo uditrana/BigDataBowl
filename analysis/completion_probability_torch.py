@@ -66,7 +66,7 @@ class PlaysDataset(torch.utils.data.Dataset):
         play_list_grouped = play_list.groupby(['gameId', 'playId'])
         play_list['forward_frameId'] = play_list_grouped.forward_frameId.transform('mean')
         play_list['arrived_frameId'] = play_list_grouped.arrived_frameId.transform('mean')
-        play_list['tof'] = np.clip(play_list.loc['arrived_frameId'] - play_list.loc['forward_frameId'], 0, 39)
+        play_list['tof'] = np.clip(play_list['arrived_frameId'] - play_list['forward_frameId'], 0, 39)
         play_list = play_list.drop_duplicates()
 
         if self.tuning == TuningParam.sigma:
@@ -105,7 +105,7 @@ class PlaysDataset(torch.utils.data.Dataset):
         tracking_df = tracking_df.replace('DEF', 0)
 
         # calculate tracking_df/player_reached inds for each play
-        event_ends = tracking_df.groupby(['gameId', 'playId', 'frameId'])
+        #event_ends = tracking_df.groupby(['gameId', 'playId', 'frameId'])
 
         # drop duplicate columns and store tracking_df
         self.player_reached = self.player_reached.drop(columns=['ball_end_x', 'ball_end_y'])
@@ -123,6 +123,8 @@ class PlaysDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         gameId = self.play_list[idx, 0]
         playId = self.play_list[idx, 1]
+        forward_frameId = self.play_list[idx, 2]
+        arrived_frameId = self.play_list[idx, 3]
         tof = self.play_list[idx, 4]
         # TODO(adit98) calculate play_start_ind, play_end_ind, remove gameId, playId
         #play_start_ind = 
@@ -130,7 +132,7 @@ class PlaysDataset(torch.utils.data.Dataset):
         # THIS MIGHT BE WHERE SLOWDOWN HAPPENS - try and use np style indexing instead
         # frame = self.all_plays.iloc[play_start_ind:play_end_ind + 1]
         # load frame, sigma_label, and ball_end, only keep relevant frames
-        frame = self.all_plays.loc[(self.all_plays.gameId == gameId) & (self.all_plays.playId == playId)]
+        frame = self.all_plays.loc[(self.all_plays.gameId == gameId) & (self.all_plays.playId == playId) & (self.all_plays.frameId == forward_frameId)]
         frame['tof'] = tof
 
         if self.tuning == TuningParam.lamb:
@@ -154,7 +156,7 @@ class PlaysDataset(torch.utils.data.Dataset):
             data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
                 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
             label = torch.tensor(sigma_lambda_label['close_to_ball'].values)
-        
+
         if data.size(0) < self.max_num:
             data = torch.cat([data, torch.ones([self.max_num - data.size(0), data.size(1)])], dim=0)
             label = torch.cat([label, torch.zeros([self.max_num - label.size(0)])], dim=0)
@@ -223,6 +225,12 @@ class CompProbModel(torch.nn.Module):
         # calculate time it takes for each player to reach each field position accounting for their current velocity and acceleration
         t_lt_smax = (self.s_max - int_s0) / self.a_max  #F, J,
         d_lt_smax = t_lt_smax * ((int_s0 + self.s_max) / 2) #F, J,
+
+        # if accelerating would overshoot, then t = -v0/a + sqrt(v0^2/a^2 + 2x/a) (from kinematics)
+        t_lt_smax = torch.where(d_lt_smax > int_d_mag, -int_s0 / self.a_max + \
+                torch.sqrt((int_s0 / self.a_max) ** 2 + 2 * int_d_mag / self.a_max), t_lt_smax) # F, J
+        d_lt_smax = torch.max(torch.min(d_lt_smax, int_d_mag), torch.zeros_like(d_lt_smax)) # F, J
+
         d_at_smax = int_d_mag - d_lt_smax               #F, J,
         t_at_smax = d_at_smax / self.s_max              #F, J,
         t_tot = self.reax_t + t_lt_smax + t_at_smax     # F, J,
