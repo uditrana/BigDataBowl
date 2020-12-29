@@ -31,85 +31,90 @@ class PlaysDataset(torch.utils.data.Dataset):
             # load csvs
             tracking_df = pd.read_csv(os.path.join(data_dir, 'week%s_norm.csv' % wk))
 
+        # generate unique id from game, play, frame ids
+        tracking_df['uniqueId'] = tracking_df[['gameId', 'playId', 'frameId']].apply(lambda row: '_'.join(row.values.astype(str)), axis=1)
+
         # remove frames with more than 17 players' tracking data + QB + ball (19)
-        tracking_df = tracking_df.groupby(['gameId', 'playId', 'frameId']).filter(lambda x: len(x.nflId.unique()) <= 19)
+        tracking_df = tracking_df.groupby(['uniqueId']).filter(lambda x: len(x.nflId.unique()) <= 19)
+
+        # calculate pass outcome in tracking_df
+        tracking_df['pass_outcome'] = tracking_df['event'].copy().replace({'pass_forward': 0, 'pass_arrived': 0,
+            'pass_outcome_incomplete': 0, 'pass_outcome_interception': 0, 'pass_outcome_caught': 1, 'pass_outcome_touchdown': 1})
+        tracking_df[(tracking_df.pass_outcome != 0) & (tracking_df.pass_outcome != 1)] = 0 # everything else is 0
+        tracking_df['pass_outcome'] = tracking_df.groupby(['uniqueId']).pass_outcome.transform('max')
 
         # get valid frames for tuning from tracking df (consider every pass, labels are 1 if there is a player close by)
-        pass_forward_plays = tracking_df.loc[tracking_df['event'] == 'pass_forward'][['gameId', 'playId']].drop_duplicates()
-        pass_attempted_plays = tracking_df.loc[tracking_df['event'] == 'pass_arrived'][['gameId', 'playId']].drop_duplicates()
-        tracking_df = pass_forward_plays.merge(pass_attempted_plays.merge(tracking_df, on=['gameId', 'playId'], how='inner'), on=['gameId', 'playId'], how='inner')
+        pass_forward_plays = tracking_df.loc[tracking_df['event'] == 'pass_forward'][['uniqueId']].copy().drop_duplicates()
+        pass_arrived_plays = tracking_df.loc[tracking_df['event'] == 'pass_arrived'][['uniqueId']].copy().drop_duplicates()
+        tracking_df = tracking_df.loc[(tracking_df.uniqueId.isin(pass_forward_plays)) & (tracking_df.uniqueId.isin(pass_arrived_plays))]
 
-        # add forward_frameId, arrived_frameId to play_list which contains first frame of pass_forward, pass_arrived for each play
-        tracking_df['forward_frameId'] = tracking_df.loc[tracking_df.event == 'pass_forward'].groupby(['gameId', 'playId']).frameId.transform('min')
-        tracking_df['arrived_frameId'] = tracking_df.loc[tracking_df.event == 'pass_arrived'].groupby(['gameId', 'playId']).frameId.transform('min')
+        # get forward_frameId, arrived_frameId which contains first frame of pass_forward, pass_arrived for each play
+        tracking_df['forward_frameId'] = tracking_df.loc[tracking_df.event == 'pass_forward'].groupby('uniqueId').frameId.transform('min')
+        tracking_df['arrived_frameId'] = tracking_df.loc[tracking_df.event == 'pass_arrived'].groupby('uniqueId').frameId.transform('min')
 
         # calculate ball ending position
-        ball_end = tracking_df.loc[(tracking_df.nflId == 0) & (tracking_df.event == 'pass_arrived')][['gameId', 'playId', 'x', 'y']].copy()
+        ball_end = tracking_df.loc[(tracking_df.nflId == 0) & (tracking_df.event == 'pass_arrived')][['uniqueId', 'x', 'y']].copy()
         ball_end = ball_end.rename(columns={'x': 'ball_end_x', 'y': 'ball_end_y'}).drop_duplicates()
         
         # calculate ball position at throw
-        ball_start = tracking_df.loc[(tracking_df.nflId == 0) & (tracking_df.event == 'pass_forward')][['gameId', 'playId', 'x', 'y']].copy()
+        ball_start = tracking_df.loc[(tracking_df.nflId == 0) & (tracking_df.event == 'pass_forward')][['uniqueId', 'x', 'y']].copy()
         ball_start = ball_start.rename(columns={'x': 'ball_start_x', 'y': 'ball_start_y'}).drop_duplicates()
 
-        # merge into single df
-        ball_start_end = ball_end.merge(ball_start, on=['gameId', 'playId'])
+        # merge into single df (could make this faster with a simple concatenate)
+        ball_start_end = ball_end.merge(ball_start, on='uniqueId')
 
         # remove plays where ball is thrown out of bounds
         ball_start_end = ball_start_end.loc[(ball_start_end.ball_end_x <= 119.5) & (ball_start_end.ball_end_x >= 0.5) & \
                 (ball_start_end.ball_end_y <= 53.5) & (ball_start_end.ball_end_y >= -0.5)]
         
         # merge tracking_df with ball_end and ball_start
-        tracking_df = tracking_df.loc[tracking_df.nflId != 0].merge(ball_start_end, on=['gameId', 'playId'])
-
-        # this shit is fucking retarded why do you have to copy this
-        play_list = tracking_df[['gameId', 'playId', 'forward_frameId', 'arrived_frameId']].copy()
-        play_list_grouped = play_list.groupby(['gameId', 'playId'])
-        play_list['forward_frameId'] = play_list_grouped.forward_frameId.transform('mean')
-        play_list['arrived_frameId'] = play_list_grouped.arrived_frameId.transform('mean')
-        play_list['tof'] = np.clip(play_list['arrived_frameId'] - play_list['forward_frameId'], 0, 40)
-        play_list = play_list.drop_duplicates()
+        tracking_df = tracking_df.loc[tracking_df.nflId != 0].merge(ball_start_end, on='uniqueId')
 
         if self.tuning == TuningParam.sigma:
             # for each player, label whether they reached the ball (radius of 1.5 yds)
-            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['gameId', 'playId',
-                'frameId', 'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y']].copy()
+            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['uniqueId',
+                'nflId', 'x', 'y', 'ball_end_x', 'ball_end_y', 'pass_outcome', 'team_pos']].copy()
             self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
                         self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
                         self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
 
         elif self.tuning == TuningParam.lamb:
-            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['gameId', 'playId',
-                'frameId', 'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y']].copy()
+            self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['uniqueId',
+                'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y', 'pass_outcome']].copy()
             self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
                         self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
                         self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
 
             # remove frames where nobody is close to ball when ball arrives
-            close_to_ball = self.player_reached.groupby(['gameId', 'playId']).filter(lambda x: x.close_to_ball.sum() > 0)[['gameId',
-                'playId']].copy().drop_duplicates()
-            tracking_df = close_to_ball.merge(tracking_df, on=['gameId', 'playId'])
-            self.player_reached = close_to_ball.merge(self.player_reached, on=['gameId', 'playId'])
-            play_list = tracking_df[['gameId', 'playId']].copy()
+            close_to_ball = self.player_reached.groupby('uniqueId').filter(lambda x: x.close_to_ball.sum() > 0)['uniqueId']
+            tracking_df = tracking_df.loc[tracking_df.uniqueId.isin(close_to_ball)]
+            self.player_reached = self.player_reached.loc[self.player_reached.uniqueId.isin(close_to_ball)]
 
             # TODO @SS I think this should be DEF here?
             # control is given by (player is on offense) XOR (ball is caught)
             self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'DEF') ^ \
-                    self.player_reached['event'].isin(['pass_outcome_caught', 'pass_outcome_touchdown'])).astype(int)
-
-        # replace positions with ints
-        self.player_reached = self.player_reached.replace('OFF', 1)
-        self.player_reached = self.player_reached.replace('DEF', 0)
+                    self.player_reached['pass_outcome']).astype(int)
 
         # replace positions with ints
         tracking_df = tracking_df.replace('OFF', 1)
         tracking_df = tracking_df.replace('DEF', 0)
 
-        # calculate tracking_df/player_reached inds for each play
-        #event_ends = tracking_df.groupby(['gameId', 'playId', 'frameId'])
+        # drop excess columns
+        self.player_reached = self.player_reached.drop(columns=['pass_outcome', 'ball_end_x', 'ball_end_y', 'team_pos', 'x', 'y'])
+        self.all_plays = tracking_df[['uniqueId', 'nflId', 'x', 'y', 'v_x', 'v_y',
+            'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']]
 
-        # drop duplicate columns and store tracking_df
-        self.player_reached = self.player_reached.drop(columns=['ball_end_x', 'ball_end_y'])
-        self.all_plays = tracking_df
+        # generate play list
+        play_list = tracking_df[['gameId', 'playId', 'forward_frameId', 'arrived_frameId']].copy()
+
+        # get rid of nans with transform
+        play_list_grouped = play_list.groupby(['gameId', 'playId'])
+        play_list['forward_frameId'] = play_list_grouped.forward_frameId.transform('max')
+        play_list['arrived_frameId'] = play_list_grouped.arrived_frameId.transform('max')
+
+        # calculate tof (units of 0.1 s)
+        play_list['tof'] = np.clip(play_list['arrived_frameId'] - play_list['forward_frameId'], 1, 40)
+        play_list = play_list.drop_duplicates()
 
         # turn play list into np array
         self.play_list = play_list.values
@@ -126,25 +131,17 @@ class PlaysDataset(torch.utils.data.Dataset):
         forward_frameId = self.play_list[idx, 2]
         arrived_frameId = self.play_list[idx, 3]
         tof = self.play_list[idx, 4]
-        # TODO(adit98) calculate play_start_ind, play_end_ind, remove gameId, playId
-        #play_start_ind = 
 
-        # THIS MIGHT BE WHERE SLOWDOWN HAPPENS - try and use np style indexing instead
-        # frame = self.all_plays.iloc[play_start_ind:play_end_ind + 1]
+        # calculate unique ids
+        forward_uniqueId = '_'.join(gameId, playId, forward_frameId)
+        arrived_uniqueId = '_'.join(gameId, playId, arrived_frameId)
+
+        # THIS MIGHT BE WHERE SLOWDOWN HAPPENS - TODO try and use np style indexing instead
+
         # load frame, sigma_label, and ball_end, only keep relevant frames
-        frame = self.all_plays.loc[(self.all_plays.gameId == gameId) & (self.all_plays.playId == playId) & (self.all_plays.frameId == forward_frameId)]
+        frame = self.all_plays.loc[self.all_plays.uniqueId == forward_uniqueId]
         frame['tof'] = tof
-
-        if self.tuning == TuningParam.lamb:
-            sigma_lambda_label = self.player_reached.loc[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId) & \
-                (self.player_reached.frameId == arrived_frameId)][['nflId', 'close_to_ball', 'control_ball']].copy()
-        else:
-            sigma_lambda_label = self.player_reached.loc[(self.player_reached.gameId == gameId) & (self.player_reached.playId == playId) & \
-                    (self.all_plays.frameId == arrived_frameId)][['nflId', 'close_to_ball']].copy()
-
-        ## this is used to pick which frame we want our PPCF to be calculated based off of
-        #if self.event_filter is not None:
-        #    frame = frame[frame.event == self.event_filter]
+        sigma_lambda_label = self.player_reached.loc[self.player_reached.uniqueId == arrived_uniqueId].drop(columns='uniqueId')
 
         # generate data, label, fill missing data
         if self.tuning == TuningParam.lamb:
@@ -257,7 +254,7 @@ class CompProbModel(torch.nn.Module):
         else:
             # get ball_start
             ball_start = frame[:, 0, 8:10]
-            reach_vecs = self.field_locs - ball_start
+            reach_vecs = self.field_locs.unsqueeze(0) - ball_start.unsqueeze(1)
             reach_dist = torch.norm(reach_vecs, dim=-1)
         
             dx = reach_vecs[:, 0] #F
@@ -394,6 +391,9 @@ if __name__ == '__main__':
             optimizer.step()
 
             prog_bar.set_description("Batch %d Loss %.3f" % (epoch, total_loss / (ind + 1)))
+        
+        # save model
+        torch.save(model.state_dict(), 'tuned_model.pt')
 
     print(model.tti_lambda_off)
     print(model.tti_lambda_def)
