@@ -41,25 +41,25 @@ pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team'])
 out_dir_path = '../output/{}'  # for cloud runs
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
-bst = joblib.load("./in/xyac_model.model")
-xgb.plot_importance(bst)
-scores = bst.get_score(importance_type='gain')
-print(scores.keys())
-cols_when_model_builds = bst.feature_names
-model = treelite.Model.from_xgboost(bst)
-toolchain = 'gcc'
-model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
-                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+# bst = joblib.load("./in/xyac_model.model")
+# xgb.plot_importance(bst)
+# scores = bst.get_score(importance_type='gain')
+# print(scores.keys())
+# cols_when_model_builds = bst.feature_names
+# model = treelite.Model.from_xgboost(bst)
+# toolchain = 'gcc'
+# model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
+#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
-bst = joblib.load("./in/epa_model_rishav_no_time.model")
-xgb.plot_importance(bst)
-scores = bst.get_score(importance_type='gain')
-print(scores.keys())
-cols_when_model_builds = bst.feature_names
-model = treelite.Model.from_xgboost(bst)
-toolchain = 'gcc'
-model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
-                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+# bst = joblib.load("./in/epa_model_rishav_no_time.model")
+# xgb.plot_importance(bst)
+# scores = bst.get_score(importance_type='gain')
+# print(scores.keys())
+# cols_when_model_builds = bst.feature_names
+# model = treelite.Model.from_xgboost(bst)
+# toolchain = 'gcc'
+# model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
+#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
 
 def params(): return None  # create an empty object to add params
@@ -371,9 +371,10 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
             # independent int probs at each point on trajectory
             all_p_int_traj = np.sum(p_int_traj_norm, axis=-1)  # F, T, T
-            off_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'OFF'))
-            def_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'DEF'))
-            ind_p_int_traj = p_int_traj_norm  # use for analyzing specific players
+            # all_p_int_traj = ne.evaluate('sum(p_int_traj_norm, axis=-1)')  # F, T, T
+            # off_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'OFF'))
+            # def_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'DEF'))
+            ind_p_int_traj = p_int_traj_norm  # use for analyzing specific players F, T, T, J
 
             # calc decaying residual probs after you take away p_int on earlier times in the traj
             compl_all_p_int_traj = 1-all_p_int_traj  # F, T, T
@@ -384,14 +385,14 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
             # multiply residual prob by p_int at that location
             # all_completion_prob_dt = shift_compl_cumsum * all_p_int_traj  # F, T, T
-            off_completion_prob_dt = shift_compl_cumsum * off_p_int_traj  # F, T, T
-            def_completion_prob_dt = shift_compl_cumsum * def_p_int_traj  # F, T, T
+            # off_completion_prob_dt = shift_compl_cumsum * off_p_int_traj  # F, T, T
+            # def_completion_prob_dt = shift_compl_cumsum * def_p_int_traj  # F, T, T
             ind_completion_prob_dt = shift_compl_cumsum[:, :, :, None] * ind_p_int_traj  # F, T, T, J
 
             # now accumulate values over total traj for each team and take at T=t
             # all_completion_prob = np.cumsum(all_completion_prob_dt, axis=-1)  # F, T, T
-            off_completion_prob = np.cumsum(off_completion_prob_dt, axis=-1)  # F, T, T
-            def_completion_prob = np.cumsum(def_completion_prob_dt, axis=-1)  # F, T, T
+            # off_completion_prob = np.cumsum(off_completion_prob_dt, axis=-1)  # F, T, T
+            # def_completion_prob = np.cumsum(def_completion_prob_dt, axis=-1)  # F, T, T
             ind_completion_prob = np.cumsum(ind_completion_prob_dt, axis=-2)  # F, T, T, J
 
             #     #### Toy example
@@ -404,11 +405,13 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             # this einsum takes the diagonal values over the last two axes where T = t
             # this takes care of the t > T issue.
             # all_p_int_pass = np.einsum('ijj->ij', all_completion_prob)  # F, T
-            off_p_int_pass = np.einsum('ijj->ij', off_completion_prob)  # F, T
-            def_p_int_pass = np.einsum('ijj->ij', def_completion_prob)  # F, T
+            # off_p_int_pass = np.einsum('ijj->ij', off_completion_prob)  # F, T
+            # def_p_int_pass = np.einsum('ijj->ij', def_completion_prob)  # F, T
             ind_p_int_pass = np.einsum('ijjk->ijk', ind_completion_prob)  # F, T, J
             # no_p_int_pass = 1-all_p_int_pass #F, T
 
+            off_p_int_pass = np.sum(ind_p_int_pass, axis=-1, where=(player_teams == 'OFF'))  # F, T
+            def_p_int_pass = np.sum(ind_p_int_pass, axis=-1, where=(player_teams == 'DEF'))  # F, T
             # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
             # assert np.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
             return off_p_int_pass, def_p_int_pass, ind_p_int_pass
