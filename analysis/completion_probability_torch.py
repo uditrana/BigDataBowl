@@ -97,9 +97,12 @@ class PlaysDataset(torch.utils.data.Dataset):
             self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'DEF') ^ \
                     self.player_reached['event'].isin(['pass_outcome_caught', 'pass_outcome_touchdown'])).astype(int)
 
-        # replace positions with ints
-        self.player_reached = self.player_reached.replace('OFF', 1)
-        self.player_reached = self.player_reached.replace('DEF', 0)
+        if self.tuning != TuningParam.alpha:  # alpha doesn't need this for label
+            # replace positions with ints
+            self.player_reached = self.player_reached.replace('OFF', 1)
+            self.player_reached = self.player_reached.replace('DEF', 0)
+            # drop duplicate columns and store tracking_df
+            self.player_reached = self.player_reached.drop(columns=['ball_end_x', 'ball_end_y'])
 
         # replace positions with ints
         tracking_df = tracking_df.replace('OFF', 1)
@@ -108,8 +111,6 @@ class PlaysDataset(torch.utils.data.Dataset):
         # calculate tracking_df/player_reached inds for each play
         #event_ends = tracking_df.groupby(['gameId', 'playId', 'frameId'])
 
-        # drop duplicate columns and store tracking_df
-        self.player_reached = self.player_reached.drop(columns=['ball_end_x', 'ball_end_y'])
         self.all_plays = tracking_df
 
         # turn play list into np array
@@ -157,10 +158,16 @@ class PlaysDataset(torch.utils.data.Dataset):
             data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
                 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
             label = torch.tensor(sigma_lambda_label['close_to_ball'].values)
-
+        elif self.tuning == TuningParam.alpha:
+            data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
+                'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
+            # model gets prob assigned to true pass in frame, so we just need BCE(prob_true_pass, 1)
+            label = torch.tensor(1)
         if data.size(0) < self.max_num:
             data = torch.cat([data, torch.ones([self.max_num - data.size(0), data.size(1)])], dim=0)
-            label = torch.cat([label, torch.zeros([self.max_num - label.size(0)])], dim=0)
+            if self.tuning != TuningParam.alpha:
+                # don't want to 0-pad label for alpha
+                label = torch.cat([label, torch.zeros([self.max_num - label.size(0)])], dim=0)
 
         # TODO(adit98) investigate why this happens, for now put this in as a hack
         if data.size(0) > self.max_num:
@@ -171,7 +178,8 @@ class PlaysDataset(torch.utils.data.Dataset):
 
 # Completion Probability Model
 class CompProbModel(torch.nn.Module):
-    def __init__(self, a_max=7.0, s_max=9.0, avg_ball_speed=20.0, tti_sigma=0.5, tti_lambda_off=1.0, tti_lambda_def=1.0, tuning=None):
+    def __init__(self, a_max=7.0, s_max=9.0, avg_ball_speed=20.0, tti_sigma=0.5,
+            tti_lambda_off=1.0, tti_lambda_def=1.0, ppc_alpha=1.0, tuning=None):
         super().__init__()
 
         # define self.tuning
@@ -198,10 +206,51 @@ class CompProbModel(torch.nn.Module):
         self.x = torch.linspace(0.5, 119.5, 120)
         self.y = torch.linspace(-0.5, 53.5, 55)
         self.y[0] = -0.2
-        self.xx, self.yy = torch.meshgrid(self.x, self.y)
+        self.yy, self.xx = torch.meshgrid(self.y, self.x)
         self.field_locs = Parameter(torch.flatten(torch.stack((self.xx, self.yy), dim=-1), end_dim=-2), requires_grad=False)  # (F, 2)
         self.T = Parameter(torch.linspace(0.1, 4, 40), requires_grad=False) # (T,)
 
+        # for hist trans prob
+        self.hist_x_min, self.hist_x_max = -9, 70
+        self.hist_y_min, self.hist_y_max = -39, 40
+        self.hist_t_min, self.hist_t_max = 10, 63
+        self.T_given_Ls_df = pd.read_pickle('in/T_given_L.pkl')
+
+    def get_hist_trans_prob(self, frame):
+        B = len(frame)
+        """ P(L|t) """
+        ball_start = frame[:, 0, 8:10] # (B, 2)
+        ball_start_ind = torch.round(ball_start).long()
+        reach_vecs = self.field_locs.unsqueeze(0) - ball_start.unsqueeze(1)  # (B, F, 2)
+        # mask for zeroing out parts of the field that are too far to be thrown to per the L_given_t model
+        L_t_mask = torch.zeros(B, *self.xx.shape)  # (B, Y, X)
+        b_zeros = torch.zeros(ball_start_ind.shape[0])
+        b_ones = torch.ones(ball_start_ind.shape[0])
+        for bb in range(B):
+            L_t_mask[bb, max(0, ball_start_ind[bb,1]+self.hist_y_min):\
+                        min(len(self.y)-1, ball_start_ind[bb,1]+self.hist_y_max),\
+                     max(0, ball_start_ind[bb,0]+self.hist_x_min):\
+                        min(len(self.x)-1, ball_start_ind[bb,0]+self.hist_x_max)] = 1.
+        L_t_mask = L_t_mask.flatten(1)  # (B, F)
+        L_given_t = L_t_mask #changed L_given_t to uniform after discussion
+        # renormalize since part of L|t may have been off field
+        L_given_t /= L_given_t.sum(1, keepdim=True)  # (B, F)
+
+        """ P(T|L) """
+        # we find T|L for sufficiently close spots (1 < L <= 60)
+        reach_dist_int = torch.round(torch.linalg.norm(reach_vecs, dim=-1)).long()  # (B, F)
+        reach_dist_in_bounds_idx = (reach_dist_int > 1) & (reach_dist_int <= 60)
+        reach_dist_in_bounds = reach_dist_int[reach_dist_in_bounds_idx]  # 1d tensor
+        T_given_L_subset = torch.from_numpy(self.T_given_Ls_df.set_index('pass_dist').loc[reach_dist_in_bounds, 'p'].to_numpy()).float()\
+            .reshape(-1, len(self.T))  # (BF~, T) ; BF~ is subset of B*F that is in [1, 60] yds from ball
+        T_given_L = torch.zeros(B*len(self.field_locs), len(self.T))  # (B, F, T)
+        # fill in the subset of values computed above
+        T_given_L[reach_dist_in_bounds_idx.flatten()] = T_given_L_subset
+        T_given_L = T_given_L.reshape(B, len(self.field_locs), -1)  # (B, F, T)
+
+        L_T_given_t = L_given_t[...,None] * T_given_L  # (B, F, T)
+        L_T_given_t /= L_T_given_t.sum((1, 2), keepdim=True) # normalize all passes after some have been chopped off
+        return L_T_given_t  # (B, F, T)
 
     def forward(self, frame):
         v_x_r = frame[:, :, 5] * self.reax_t + frame[:, :, 3]
@@ -222,15 +271,9 @@ class CompProbModel(torch.nn.Module):
         int_d_mag = torch.norm(int_d_vec, dim=-1) # F, J
 
         # take dot product of velocity and direction
-<<<<<<< HEAD
-        int_s0 = torch.clamp(torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag, -1 * self.s_max.item(), self.s_max.item()) #F, J
-        #int_s0 = torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag
-
-=======
         int_s0 = torch.clamp(torch.sum(int_d_vec * reaction_player_vels.unsqueeze(1), dim=-1) / int_d_mag,
                 -1 * self.s_max.item(), self.s_max.item()) #F, J
-        
->>>>>>> d92f2f412e9c227fd80bbd27244af3a30f5da283
+
         # calculate time it takes for each player to reach each field position accounting for their current velocity and acceleration
         t_lt_smax = (self.s_max - int_s0) / self.a_max  #F, J,
         d_lt_smax = t_lt_smax * ((int_s0 + self.s_max) / 2) #F, J,
@@ -246,12 +289,7 @@ class CompProbModel(torch.nn.Module):
 
         # subtract the arrival time (t_tot) from time of flight of ball
         int_dT = self.T.view(1, 1, -1, 1) - t_tot.unsqueeze(2)         #F, T, J
-<<<<<<< HEAD
-        #int_dT.register_hook(lambda x: print(x))
 
-=======
-        
->>>>>>> d92f2f412e9c227fd80bbd27244af3a30f5da283
         # calculate interception probability for each player, field loc, time of flight (logistic function)
         p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) #F, T, J
 
@@ -269,9 +307,17 @@ class CompProbModel(torch.nn.Module):
             return p_int
 
         elif self.tuning == TuningParam.alpha:
-            p_int = torch.gather(p_int, 2, tof).squeeze()
-            p_int = torch.gather(p_int, 1, ball_field_ind).squeeze()
+            h_trans_prob = self.get_hist_trans_prob(frame)  # (B, F, T)
+            # index into true pass
+            p_int_throw = torch.gather(p_int, 2, tof).squeeze()
+            p_int_throw = torch.gather(p_int_throw, 1, ball_field_ind).squeeze()  # (B, J)
 
+            h_trans_prob_throw = torch.gather(h_trans_prob, 2, tof[...,0]).squeeze()
+            h_trans_prob_throw = torch.gather(h_trans_prob_throw, 1, ball_field_ind[...,0]).squeeze()  # (B,)
+
+            p_int_throw_off = torch.sum(p_int_throw * (player_teams == 1), dim=1)  # (B,)
+            trans_prob_throw = h_trans_prob_throw * torch.pow(p_int_throw_off, self.ppc_alpha)  # (B,)
+            return trans_prob_throw
 
         elif self.tuning == TuningParam.lamb:
             # get ball_start
@@ -366,6 +412,9 @@ if __name__ == '__main__':
     elif args.tuning == 'lambda':
         TUNING = TuningParam.lamb
         event_filter = 'pass_forward'
+    elif args.tuning == 'alpha':
+        TUNING = TuningParam.alpha
+        event_filter = 'pass_forward'
     else:
         raise NotImplementedError("Tuning " + args.tuning + " is not supported.")
 
@@ -402,7 +451,6 @@ if __name__ == '__main__':
             if torch.cuda.is_available():
                 data = data.cuda()
                 target = target.cuda()
-
             output = model(data)
             loss = loss_fn(output, target.float())
             total_loss = total_loss + loss.detach().cpu().item()
@@ -417,3 +465,4 @@ if __name__ == '__main__':
     print(model.tti_lambda_off)
     print(model.tti_lambda_def)
     print(model.tti_sigma)
+    print(model.ppc_alpha)
