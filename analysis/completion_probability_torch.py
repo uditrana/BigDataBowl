@@ -232,7 +232,7 @@ class CompProbModel(torch.nn.Module):
                 requires_grad=(self.tuning == TuningParam.alpha)).float()
         self.a_max = Parameter(torch.tensor([a_max]), requires_grad= (self.tuning == TuningParam.av)).float()
         self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.av)).float()
-        self.reax_t = Parameter(torch.tensor([0.2])).float()
+        self.reax_t = Parameter(torch.tensor([0.2]), requires_grad = (self.tuning == TuningParam.av)).float()
         self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed]), requires_grad=False).float()
         self.g = Parameter(torch.tensor([10.72468]), requires_grad=False) #y/s/s
         self.z_max = Parameter(torch.tensor([3.]), requires_grad=False)
@@ -422,15 +422,20 @@ class CompProbModel(torch.nn.Module):
             int_d_mag = torch.gather(int_d_mag, 1, ball_field_ind).squeeze()
 
             # projected locations at t = tof, f = ball_field_ind
+            #d_proj = torch.where(tof.unsqueeze(-1) <= self.reax_t, self.zero_cuda,
+            #        torch.where(tof.unsqueeze(-1) <= (t_lt_smax + self.reax_t),
+            #        (int_s0 * (tof.unsqueeze(-1) - self.reax_t)) + 0.5 * self.a_max \
+            #                * (tof.unsqueeze(-1) - self.reax_t) ** 2,
+            #        torch.where(tof.unsqueeze(-1) <= (t_lt_smax + t_at_smax + self.reax_t),
+            #        (d_lt_smax + (d_at_smax * (tof.unsqueeze(-1) - t_lt_smax - self.reax_t))),
+            #        int_d_mag))) # J,
             d_proj = torch.where(tof.unsqueeze(-1) <= self.reax_t, self.zero_cuda,
                     torch.where(tof.unsqueeze(-1) <= (t_lt_smax + self.reax_t),
                     (int_s0 * (tof.unsqueeze(-1) - self.reax_t)) + 0.5 * self.a_max \
                             * (tof.unsqueeze(-1) - self.reax_t) ** 2,
-                    torch.where(tof.unsqueeze(-1) <= (t_lt_smax + t_at_smax + self.reax_t),
-                    (d_lt_smax + (d_at_smax * (tof.unsqueeze(-1) - t_lt_smax - self.reax_t))),
-                    int_d_mag))) # J,
+                    d_lt_smax + self.s_max * (tof.unsqueeze(-1) - t_lt_smax - self.reax_t))) # J,
 
-            d_proj = torch.minimum(d_proj, int_d_mag)
+            #d_proj = torch.minimum(d_proj, int_d_mag)
 
             x_proj = reaction_player_locs[..., 0]  + d_proj * torch.cos(int_d_theta)  # J
             y_proj = reaction_player_locs[..., 1]  + d_proj * torch.sin(int_d_theta)  # J
