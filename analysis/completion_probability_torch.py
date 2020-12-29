@@ -201,10 +201,10 @@ class PlaysDataset(torch.utils.data.Dataset):
             # model gets prob assigned to true pass in frame, so we just need BCE(prob_true_pass, 1)
             label = torch.tensor(1)
         if data.size(0) < self.max_num:
-            data = torch.cat([data, torch.ones([self.max_num - data.size(0), data.size(1)])], dim=0)
+            data = torch.cat([data, torch.zeros([self.max_num - data.size(0), data.size(1)])], dim=0)
             if self.tuning != TuningParam.alpha:
                 # don't want to 0-pad label for alpha
-                label = torch.cat([label, torch.zeros([self.max_num - label.size(0)])], dim=0)
+                label = torch.cat([label, torch.zeros([self.max_num - label.size(0), *label.size()[1:]])], dim=0)
 
         # TODO(adit98) investigate why this happens, for now put this in as a hack
         if data.size(0) > self.max_num:
