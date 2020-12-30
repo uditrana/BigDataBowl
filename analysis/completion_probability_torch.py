@@ -446,7 +446,7 @@ class CompProbModel(torch.nn.Module):
         int_dT = self.T.view(1, 1, -1, 1) - t_tot.unsqueeze(2)         #F, T, J
 
         # calculate interception probability for each player, field loc, time of flight (logistic function)
-        p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) #F, T, J
+        p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) # (B, F, T, J)
 
         if self.tuning == TuningParam.sigma:
             p_int = torch.gather(p_int, 2, tof).squeeze()
@@ -455,19 +455,17 @@ class CompProbModel(torch.nn.Module):
 
         elif self.tuning == TuningParam.alpha:
             h_trans_prob = self.get_hist_trans_prob(frame)  # (B, F, T)
-            # index into true pass. [...,0] necessary on indices because no J dimension
-            h_trans_prob_throw = torch.gather(h_trans_prob, 2, tof[...,0]).squeeze()
-            h_trans_prob_throw = torch.gather(h_trans_prob_throw, 1, ball_field_ind[...,0]).squeeze()  # (B,)
             if self.use_ppc:
                 ppc_off, *_ = self.get_ppc_off(frame, p_int)
-                ppc_off_throw = torch.gather(ppc_off, 2, tof[...,0]).squeeze()
-                ppc_off_throw = torch.gather(ppc_off_throw, 1, ball_field_ind[...,0]).squeeze()  # (B,)
-                trans_prob_throw = h_trans_prob_throw * torch.pow(ppc_off_throw, self.ppc_alpha)
+                trans_prob = h_trans_prob * torch.pow(ppc_off, self.ppc_alpha)  # (B, F, T)
             else:
-                p_int_throw = torch.gather(p_int, 2, tof).squeeze()
-                p_int_throw = torch.gather(p_int_throw, 1, ball_field_ind).squeeze()  # (B, J)
-                p_int_throw_off = torch.sum(p_int_throw * (player_teams == 1), dim=1)  # (B,)
-                trans_prob_throw = h_trans_prob_throw * torch.pow(p_int_throw_off, self.ppc_alpha)  # (B,)
+                # p_int summed over all offensive players
+                p_int_off = torch.sum(p_int * (player_teams == 1), dim=-1)  # (B, F, T)
+                trans_prob = h_trans_prob * torch.pow(p_int_off, self.ppc_alpha)  # (B,)
+            trans_prob /= trans_prob.sum(dim=(1, 2), keepdim=True)  # (B, F, T)
+            # index into true pass. [...,0] necessary on indices because no J dimension
+            trans_prob_throw = torch.gather(trans_prob, 2, tof[...,0]).squeeze()
+            trans_prob_throw = torch.gather(trans_prob_throw, 1, ball_field_ind[...,0]).squeeze()  # (B,)
             return trans_prob_throw
 
         elif self.tuning == TuningParam.lamb:
