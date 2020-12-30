@@ -87,26 +87,42 @@ class PlaysDataset(torch.utils.data.Dataset):
             # for each player, label whether they reached the ball (radius of 1.5 yds)
             self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['uniqueId',
                 'nflId', 'x', 'y', 'ball_end_x', 'ball_end_y', 'pass_outcome', 'team_pos']].copy()
-            self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
+            self.player_reached['dist_to_ball'] = np.linalg.norm(np.stack([self.player_reached.x.values,
                         self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
-                        self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
+                        self.player_reached.ball_end_y.values], axis=-1), axis=1)
+            self.player_reached['closest_to_ball'] = self.player_reached.groupby(['uniqueId',
+                'team_pos']).dist_to_ball.transform('min')
+            self.player_reached['closest_to_ball'] = (self.player_reached['dist_to_ball'] == self.player_reached['closest_to_ball']).astype(int)
+            self.player_reached = self.player_reached[['uniqueId', 'nflId', 'x', 'y', 'closest_to_ball']]
+
+            print('computed closest to ball', time.time() - start_time)
 
         elif self.tuning == TuningParam.lamb:
             self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['uniqueId',
                 'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y', 'pass_outcome']].copy()
-            self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
-                        self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
-                        self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
+            #self.player_reached['close_to_ball'] = np.less_equal(np.linalg.norm(np.stack([self.player_reached.x.values,
+            #            self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
+            #            self.player_reached.ball_end_y.values], axis=-1), axis=1), 1.5).astype(int)
 
             # remove frames where nobody is close to ball when ball arrives
-            close_to_ball = self.player_reached.groupby('uniqueId').filter(lambda x: x.close_to_ball.sum() > 0)['uniqueId']
-            tracking_df = tracking_df.loc[tracking_df.uniqueId.isin(close_to_ball)]
-            self.player_reached = self.player_reached.loc[self.player_reached.uniqueId.isin(close_to_ball)]
+            self.player_reached['dist_to_ball'] = np.linalg.norm(np.stack([self.player_reached.x.values,
+                        self.player_reached.y.values], axis=-1) - np.stack([self.player_reached.ball_end_x.values,
+                        self.player_reached.ball_end_y.values], axis=-1), axis=1)
+            self.player_reached['closest_to_ball'] = self.player_reached.groupby(['uniqueId',
+                'team_pos']).dist_to_ball.transform('min')
+            self.player_reached['closest_to_ball'] = (self.player_reached['dist_to_ball'] == self.player_reached['closest_to_ball']).astype(int)
 
-            # TODO @SS I think this should be DEF here? good catch my b
+            #close_to_ball = self.player_reached.groupby('uniqueId').filter(lambda x: x.close_to_ball.sum() > 0)['uniqueId']
+            #tracking_df = tracking_df.loc[tracking_df.uniqueId.isin(close_to_ball)]
+            #self.player_reached = self.player_reached.loc[self.player_reached.uniqueId.isin(close_to_ball)]
+
             # control is given by (player is on defense) XOR (ball is caught)
-            self.player_reached['control_ball'] = ((self.player_reached['team_pos'] == 'DEF') ^ \
-                    self.player_reached['pass_outcome']).astype(int)
+            self.player_reached['control_ball'] = self.player_reached['closest_to_ball'] * \
+                    ((self.player_reached['team_pos'] == 'DEF') ^ self.player_reached['pass_outcome']).astype(int)
+
+            self.player_reached = self.player_reached[['uniqueId', 'nflId', 'x', 'y', 'control_ball']]
+
+            print('computed control ball', time.time() - start_time)
 
         elif self.tuning == TuningParam.av:
             # for each player, label whether they reached the ball (radius of 1.5 yds)
@@ -127,8 +143,8 @@ class PlaysDataset(torch.utils.data.Dataset):
         tracking_df = tracking_df.replace('DEF', 0)
 
         # drop excess columns
-        if self.tuning == TuningParam.sigma or self.tuning == TuningParam.lamb:
-            self.player_reached = self.player_reached.drop(columns=['pass_outcome', 'ball_end_x', 'ball_end_y', 'team_pos', 'x', 'y'])
+        #if self.tuning == TuningParam.sigma or self.tuning == TuningParam.lamb:
+        #    self.player_reached = self.player_reached.drop(columns=['pass_outcome', 'ball_end_x', 'ball_end_y', 'team_pos', 'x', 'y'])
 
         self.all_plays = tracking_df[['uniqueId', 'nflId', 'x', 'y', 'v_x', 'v_y',
             'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y']]
@@ -179,31 +195,50 @@ class PlaysDataset(torch.utils.data.Dataset):
             sigma_lambda_label = self.player_reached.loc[self.player_reached.uniqueId == arrived_uniqueId].drop(columns='uniqueId')
 
         # generate data, label, fill missing data
-        if self.tuning == TuningParam.lamb:
-            nflIds = sigma_lambda_label.loc[sigma_lambda_label.close_to_ball == 1, 'nflId'].values
-            data = torch.tensor(frame.loc[frame.nflId.isin(nflIds), ['nflId', 'x', 'y', 'v_x', 'v_y',
-                'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
-            label = torch.tensor(sigma_lambda_label.loc[sigma_lambda_label.close_to_ball == 1, 'control_ball'].values)
-        elif self.tuning == TuningParam.sigma:
-            data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
-                'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
-            label = torch.tensor(sigma_lambda_label['close_to_ball'].values)
-        elif self.tuning == TuningParam.av:
+        if self.tuning == TuningParam.sigma:
             # create evaluate_dist column in frame to indicate whether each player was the closest to the ball
             sigma_lambda_label['evaluate_dist'] = (sigma_lambda_label['closest_to_ball'] > 0).astype(int)
             frame['evaluate_dist'] = sigma_lambda_label['evaluate_dist'].values
+
+            # get ending x and y from sigma_lambda_label
+            frame['end_x'] = sigma_lambda_label['x'].values
+            frame['end_y'] = sigma_lambda_label['y'].values
+
+            data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
+                'ball_start_x', 'ball_start_y', 'end_x', 'end_y', 'evaluate_dist', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
+            label = torch.ones(1)
+
+        elif self.tuning == TuningParam.lamb:
+            # create evaluate_dist column in frame to indicate whether each player was the closest to the ball
+            sigma_lambda_label['evaluate_dist'] = (sigma_lambda_label['closest_to_ball'] > 0).astype(int)
+            frame['evaluate_dist'] = sigma_lambda_label['evaluate_dist'].values
+
+            #nflIds = sigma_lambda_label.loc[sigma_lambda_label.close_to_ball == 1, 'nflId'].values
+            data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y',
+                'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'evaluate_dist',
+                'ball_end_x', 'ball_end_y', 'tof']].values).float()
+            label = torch.tensor(sigma_lambda_label[['control_ball']].values)
+
+        elif self.tuning == TuningParam.av:
+            # create evaluate_dist column in frame to indicate whether each player was the closest to the ball
+            sigma_lambda_label['evaluate_dist'] = (sigma_lambda_label['closest_to_ball'] > 0).astype(int)
+            frame['evaluate_dist'] = sigma_lambda_label[['evaluate_dist']].values
+
             data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
                 'ball_start_x', 'ball_start_y', 'evaluate_dist', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
             label = torch.tensor(sigma_lambda_label[['x', 'y']].values * sigma_lambda_label.evaluate_dist.values.reshape(-1, 1))
+
         elif self.tuning == TuningParam.alpha:
             data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y', 'a_x', 'a_y', 'team_pos',
                 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
+
             # model gets prob assigned to true pass in frame, so we just need BCE(prob_true_pass, 1)
-            label = torch.tensor(1)
+            label = torch.tensor([1.0])
+
         if data.size(0) < self.max_num:
             data = torch.cat([data, torch.zeros([self.max_num - data.size(0), data.size(1)])], dim=0)
-            if self.tuning != TuningParam.alpha:
-                # don't want to 0-pad label for alpha
+            if self.tuning != TuningParam.alpha and self.tuning != TuningParam.sigma:
+                # don't want to 0-pad label for alpha or sigma
                 label = torch.cat([label, torch.zeros([self.max_num - label.size(0), *label.size()[1:]])], dim=0)
 
         # TODO(adit98) investigate why this happens, for now put this in as a hack
@@ -216,10 +251,13 @@ class PlaysDataset(torch.utils.data.Dataset):
 # Completion Probability Model
 class CompProbModel(torch.nn.Module):
     def __init__(self, a_max=7.25, s_max=9.25, avg_ball_speed=20.0, tti_sigma=0.5, tti_lambda_off=1.0,
-                    tti_lambda_def=1.0, ppc_alpha=1.0, tuning=None, use_ppc=False):
+                    tti_lambda_def=1.0, ppc_alpha=1.0, tuning=None, use_ppc=False, use_cuda=False):
         super().__init__()
         # define self.tuning
         self.tuning = tuning
+        
+        # define whether we are using cuda
+        self.device = 'cuda' if use_cuda else 'cpu'
 
         # define parameters and whether or not to optimize
         self.tti_sigma = Parameter(torch.tensor([tti_sigma]),
@@ -230,9 +268,9 @@ class CompProbModel(torch.nn.Module):
                 requires_grad=(self.tuning == TuningParam.lamb)).float()
         self.ppc_alpha = Parameter(torch.tensor([ppc_alpha]),
                 requires_grad=(self.tuning == TuningParam.alpha)).float()
-        self.a_max = Parameter(torch.tensor([a_max]), requires_grad= (self.tuning == TuningParam.av)).float()
+        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=(self.tuning == TuningParam.av)).float()
         self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.av)).float()
-        self.reax_t = Parameter(torch.tensor([0.2]), requires_grad = (self.tuning == TuningParam.av)).float()
+        self.reax_t = Parameter(torch.tensor([0.3]), requires_grad=False).float()
         self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed]), requires_grad=False).float()
         self.g = Parameter(torch.tensor([10.72468]), requires_grad=False) #y/s/s
         self.z_max = Parameter(torch.tensor([3.]), requires_grad=False)
@@ -406,6 +444,12 @@ class CompProbModel(torch.nn.Module):
         ball_end_y = frame[:, 0, -2].int() + 1
         ball_field_ind = (ball_end_y * self.x.shape[0] + ball_end_x).long().view(-1, 1, 1).repeat(1, 1, t_tot.size(-1))
 
+        # subtract the arrival time (t_tot) from time of flight of ball
+        int_dT = self.T.view(1, 1, -1, 1) - t_tot.unsqueeze(2)         #F, T, J
+
+        # calculate interception probability for each player, field loc, time of flight (logistic function)
+        p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) #F, T, J
+
         if self.tuning == TuningParam.av:
             # collapse extra dims
             tof = self.T[tof[:, 0, 0, 0]].float()
@@ -422,20 +466,11 @@ class CompProbModel(torch.nn.Module):
             int_d_mag = torch.gather(int_d_mag, 1, ball_field_ind).squeeze()
 
             # projected locations at t = tof, f = ball_field_ind
-            #d_proj = torch.where(tof.unsqueeze(-1) <= self.reax_t, self.zero_cuda,
-            #        torch.where(tof.unsqueeze(-1) <= (t_lt_smax + self.reax_t),
-            #        (int_s0 * (tof.unsqueeze(-1) - self.reax_t)) + 0.5 * self.a_max \
-            #                * (tof.unsqueeze(-1) - self.reax_t) ** 2,
-            #        torch.where(tof.unsqueeze(-1) <= (t_lt_smax + t_at_smax + self.reax_t),
-            #        (d_lt_smax + (d_at_smax * (tof.unsqueeze(-1) - t_lt_smax - self.reax_t))),
-            #        int_d_mag))) # J,
             d_proj = torch.where(tof.unsqueeze(-1) <= self.reax_t, self.zero_cuda,
                     torch.where(tof.unsqueeze(-1) <= (t_lt_smax + self.reax_t),
                     (int_s0 * (tof.unsqueeze(-1) - self.reax_t)) + 0.5 * self.a_max \
                             * (tof.unsqueeze(-1) - self.reax_t) ** 2,
                     d_lt_smax + self.s_max * (tof.unsqueeze(-1) - t_lt_smax - self.reax_t))) # J,
-
-            #d_proj = torch.minimum(d_proj, int_d_mag)
 
             x_proj = reaction_player_locs[..., 0]  + d_proj * torch.cos(int_d_theta)  # J
             y_proj = reaction_player_locs[..., 1]  + d_proj * torch.sin(int_d_theta)  # J
@@ -447,15 +482,26 @@ class CompProbModel(torch.nn.Module):
 
             return torch.stack([masked_x, masked_y], dim=-1) # J, 2
 
-        # subtract the arrival time (t_tot) from time of flight of ball
-        int_dT = self.T.view(1, 1, -1, 1) - t_tot.unsqueeze(2)         #F, T, J
+        elif self.tuning == TuningParam.sigma:
+            # select actual tof pass
+            p_int = torch.gather(p_int, 2, tof).squeeze() # F, J
 
-        # calculate interception probability for each player, field loc, time of flight (logistic function)
-        p_int = torch.sigmoid((3.14 / (1.732 * self.tti_sigma)) * int_dT) # (B, F, T, J)
+            # select closest_player_inds
+            tmp = frame[:, :, -4]
+            idx = torch.arange(tmp.shape[1], 0, -1).to(self.device)
+            player_mask = torch.argmax(tmp * idx, 1, keepdim=True)
 
-        if self.tuning == TuningParam.sigma:
-            p_int = torch.gather(p_int, 2, tof).squeeze()
-            p_int = torch.gather(p_int, 1, ball_field_ind).squeeze()
+            p_int = torch.gather(p_int, 2, player_mask.unsqueeze(1).repeat(1, p_int.size(1), 1)).squeeze()
+
+            # get (x,y) ending position of masked players, convert to J
+            player_locs = frame[:, :, -6:-4] # J,
+            masked_player_locs = torch.gather(player_locs, 1, player_mask.unsqueeze(-1).repeat(1, 1, player_locs.size(-1)))
+            masked_player_locs = (masked_player_locs[:, :, 1] * self.x.shape[0] + masked_player_locs[:, :, 0]).long()
+
+            # gather index for closest player
+            p_int = torch.gather(p_int, 1, masked_player_locs).squeeze()
+
+            # return p_int for each player at their expected position
             return p_int
 
         elif self.tuning == TuningParam.alpha:
@@ -520,7 +566,7 @@ if __name__ == '__main__':
     ds = PlaysDataset(data_dir=args.data_dir, wk=wk, all_weeks=all_weeks, tuning=TUNING)
     loader = torch.utils.data.DataLoader(ds, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=True, pin_memory=True)
 
-    model = CompProbModel(tti_sigma=0.5, tuning=TUNING, use_ppc=args.ppc)
+    model = CompProbModel(tti_sigma=0.5, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
     if TUNING == TuningParam.av:
         loss_fn = torch.nn.MSELoss()
     else:
@@ -529,6 +575,7 @@ if __name__ == '__main__':
     # check if we want cuda
     if torch.cuda.is_available():
         model = model.cuda()
+        model.cuda = True
         loss_fn = loss_fn.cuda()
 
     optimizer = torch.optim.Adam(model.parameters())
@@ -548,6 +595,7 @@ if __name__ == '__main__':
                 data = data.cuda()
                 target = target.cuda()
             output = model(data)
+            target = target.flatten()
             loss = loss_fn(output, target.float())
             total_loss = total_loss + loss.detach().cpu().item()
 
@@ -565,5 +613,5 @@ if __name__ == '__main__':
     print('s_max', model.s_max)
     print(model.tti_lambda_off)
     print(model.tti_lambda_def)
-    print(model.tti_sigma)
+    print('sigma', model.tti_sigma)
     print(model.ppc_alpha)
