@@ -1,9 +1,7 @@
 
 import traceback
 import os
-import treelite
 import random
-import treelite_runtime
 import joblib
 import xgboost as xgb
 from tqdm import tqdm
@@ -71,19 +69,20 @@ out_dir_path = '../output/{}'  # for cloud runs
 def params(): return None  # create an empty object to add params
 
 
-params.a_max = 7.68
-params.s_max = 8.98
+params.a_max = 7.67
+params.s_max = 9.42
 # params.reax_t = params.s_max/params.a_max
-params.reax_t = 0.3
-params.tti_sigma = 0.3
-# params.tti_sigma = 0.45
+params.reax_t = 0.
+params.tti_sigma = 0.31
 params.cell_length = 1
-params.alpha = 1.0
+params.alpha = 1.2
 params.z_min = 1
 params.z_max = 3
-params.epsilon = 0.0
-params.catch_lambda = 0.6
+params.catch_lambda = 0.25
 vars(params)
+
+min_t_frame = 14
+max_t_frame = 47
 
 dt = np.float64
 dt_torch = torch.float64
@@ -171,8 +170,26 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         dtest = xgb.DMatrix(first_df[cols_when_model_builds_ep])  # treelite_runtime.Batch.from_npy2d(first_df[cols_when_model_builds_ep].values)
         ypred = epa_predictor.predict(dtest)
         ep = np.sum(ypred*epvals, axis=1)
-
         epa_df["before_play_ep"] = ep[0]
+        ###### EP FOR A INCOMPLETE #######
+        epa_df_incomp = epa_df.copy(deep=True)
+        old_down = joined_df.iloc[0]['down_x']
+        epa_df_incomp['isFirstDown'] = 0
+        for d in range(1, 6):
+            epa_df_incomp['down%d' % d] = 1 if (d == old_down+1) else 0
+        # offense is other team inverted if turnover on downs
+        epa_df_incomp['yardline_100'] = np.where(epa_df_incomp.down5 == 1, 100-epa_df_incomp['yardline_100'], epa_df_incomp['yardline_100'])
+        epa_df_incomp['ydstogo'] = np.where(epa_df_incomp.down5 == 1, 10, epa_df_incomp['ydstogo'])
+        epa_df_incomp['down1'] = np.where(epa_df_incomp.down5 == 1, 1, epa_df_incomp['down1'])
+        dtest = xgb.DMatrix(epa_df_incomp[cols_when_model_builds_ep])  # treelite_runtime.Batch.from_npy2d(epa_df_incomp[cols_when_model_builds_ep].values)
+        ypred = epa_predictor.predict(dtest)
+        ep = np.sum(ypred*epvals, axis=1)
+        epa_df['xep_inc'] = ep
+        epa_df['xepa_inc'] = np.where(
+            epa_df_incomp.down5 == 1, -epa_df['xep_inc'] - epa_df_incomp['before_play_ep'],
+            epa_df['xep_inc'] - epa_df_incomp['before_play_ep'])
+
+        ###### EP FOR A CATCH #######
 
         epa_df['los'] = 110 - epa_df['yardline_100']
         epa_df['first_down_line'] = epa_df['los'] + epa_df["ydstogo"]
@@ -215,7 +232,9 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         epa_df['xepa'] = np.where(epa_df.down5 == 1, -epa_df['xep'] - epa_df['before_play_ep'],
                                   epa_df['xep'] - epa_df['before_play_ep'])  # if turnover
 
-        only_vals = epa_df[["play_endpoint_x", "xep", "xepa"]]  # THIS CONTAINS THE EPA VALUES BASED ON PLAY ENDPOINT
+        only_vals = epa_df[["play_endpoint_x", "xep", "xepa", "xep_inc", "xepa_inc"]].rename(
+            columns={'xep': 'xep_comp', 'xepa': 'xepa_comp'})  # THIS CONTAINS THE EPA VALUES BASED ON PLAY ENDPOINT
+        # breakpoint()
         return only_vals
 
     epa_df = getEPAModel()
@@ -276,7 +295,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         t_tot = t_lt_smax+t_at_smax+params.reax_t  # F, J,
 
         # int success if T-t_tot = dT <  0. Put through sigmoid to add temporal uncertainty around
-        int_dT = T[None, :, None] - t_tot[:, None, :] + params.epsilon  # F, T, J
+        int_dT = T[None, :, None] - t_tot[:, None, :]  # F, T, J
         p_int = (1/(1. + np.exp(-np.pi/np.sqrt(3.0)/params.tti_sigma * int_dT, dtype=dt)))  # F, T, J
         p_int_adj = p_int.copy()
         p_int_def = 1-np.prod((1-p_int_adj[:, :, player_def]), axis=-1)  # F, T,
@@ -415,7 +434,9 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
             # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
             # assert np.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
-            return off_p_int_pass, def_p_int_pass, ind_p_int_pass
+            return off_p_int_pass.detach().cpu().numpy(),\
+                    def_p_int_pass.detach().cpu().numpy(),\
+                        ind_p_int_pass.detach().cpu().numpy()
 
         def get_xyac():
             x_proj_def = x_proj[:, :, player_def]  # F, T, J
@@ -494,34 +515,37 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         nonlocal epa_df
 
         ppc_off, ppc_def, ppc_ind = get_ppc()  # (F, T), (F, T), (F, T, J)
-        ppc_off, ppc_def, ppc_ind = ppc_off.detach().cpu().numpy(), ppc_def.detach().cpu().numpy(), ppc_ind.detach().cpu().numpy()
-        ind_info = np.stack((player_ids, player_teams), axis=1)
-        h_trans_prob = get_hist_trans_prob()
+        catch_prob = np.max((ppc_ind[:, :, player_teams == 'OFF'])**params.catch_lambda,
+                            axis=-1)  # F, T #doesnt handle 2 off players at ball correctly
 
+        # value model
         epa_xyac_df = get_xyac().merge(epa_df, how='left', on='play_endpoint_x')
         xyac = epa_xyac_df.xyac.to_numpy().reshape(ppc_off.shape)
         # end_x = epa_xyac_df.play_endpoint_x.to_numpy().reshape(ppc_off.shape)
-        xepa = epa_xyac_df.xepa.to_numpy().reshape(ppc_off.shape)  # F, T
+        xepa_comp = epa_xyac_df.xepa_comp.to_numpy().reshape(ppc_off.shape)  # F, T
+        xepa_inc = epa_xyac_df.xepa_inc.iloc[0]
         # assert(h_trans_prob.shape == ppc_off.shape)
+        # breakpoint()
 
-        ppc = ppc_off
+        # transition model
+        h_trans_prob = get_hist_trans_prob()   # (F, T)
+        trans = h_trans_prob * np.power(ppc_off, params.alpha)  # F, T
+        trans /= trans.sum()
 
-        trans_ppc = h_trans_prob * np.power(ppc, params.alpha)  # F, T
-        trans_pint = h_trans_prob * np.power(p_int_off_only, params.alpha)  # F, T
-        trans_ppc /= trans_ppc.sum()
-        trans_pint /= trans_pint.sum()
+        # output metrics (eppa1 uses ppc_off as catch prob, eppa2 uses catch_prob)
+        ind_eppa1_wo_value = ppc_ind * trans[..., None]  # F, T, J
+        ind_eppa1 = np.where(player_teams == 'OFF', ppc_ind * trans[..., None]
+                             * xepa_comp[..., None], ppc_ind * trans[..., None] * xepa_inc)  # F, T, J
+        eppa1_pass_val = (ppc_off*xepa_comp)+(1-ppc_off)*xepa_inc
+        eppa1 = eppa1_pass_val*trans  # F, T
+        eppa2_pass_val = (catch_prob*xepa_comp)+(1-catch_prob)*xepa_inc
+        eppa2 = eppa2_pass_val*trans  # F, T
 
-        eppa_wo_value_ppc_ind = ppc_ind * trans_ppc[..., None]  # F, T, J
-        eppa_wo_value_pint_ind = ppc_ind * trans_pint[..., None]  # F, T, J
-        eppa_ppc_ind = eppa_wo_value_ppc_ind*xepa[..., None]  # F, T, J
-        eppa_pint_ind = eppa_wo_value_pint_ind*xepa[..., None]  # F, T, J
-        eppa_ppc = np.sum(eppa_ppc_ind, axis=-1)  # F, T
-        eppa_pint = np.sum(eppa_pint_ind, axis=-1)  # F, T
-        eppa3 = p_int_off*trans_pint*xepa
-        eppa4 = p_int_off*h_trans_prob * np.power(p_int_off, params.alpha)*xepa
-        eppa_wo_trans = ppc*xepa  # F, T
-        eppa_wo_value_ppc = np.sum(eppa_wo_value_ppc_ind, axis=-1)
-        eppa_wo_value_pint = np.sum(eppa_wo_value_pint_ind, axis=-1)
+        eppa1_wo_value = ppc_off*trans
+        eppa2_wo_value = catch_prob*trans
+
+        maxEppa1Val = eppa1_pass_val[np.unravel_index(np.argmax(eppa1, axis=None), eppa1.shape)]
+        maxEppa2Val = eppa2_pass_val[np.unravel_index(np.argmax(eppa2, axis=None), eppa2.shape)]
 
         field_df = pd.DataFrame()
         player_stats_df = pd.DataFrame()
@@ -559,6 +583,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             proj_df['proj_v_y'] = v_y_proj[true_f_idx, true_T_idx]  # J
 
             proj_df['ppc_ind'] = ppc_ind[true_f_idx, true_T_idx]
+            proj_df['catch_prob'] = ppc_ind[true_f_idx, true_T_idx]**params.catch_lambda  # only valid for off players
 
             proj_df['frameId'] = frame_id
 
@@ -571,68 +596,66 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             np.savez_compressed(f'{dir}/{frame_id}', ind_info=ind_info, eppa_ind=eppa_ppc_ind)
 
         if stats_df:
-            ind_eppa1 = eppa_ppc_ind.sum(axis=(0, 1))  # J
-            ind_eppa2 = eppa_pint_ind.sum(axis=(0, 1))  # J
-            ind_eppa1_wo_value = eppa_wo_value_ppc_ind.sum(axis=(0, 1))  # J
-            ind_eppa2_wo_value = eppa_wo_value_pint_ind.sum(axis=(0, 1))  # J
+            ind_eppa1 = ind_eppa1.sum(axis=(0, 1))  # J
+            ind_eppa1_wo_value = ind_eppa1_wo_value.sum(axis=(0, 1))  # J
             player_stats_df = pd.DataFrame(
                 {'gameId': game_id, 'playId': play_id, 'frameId': frame_id, 'frame_after_snap': t, 'nflId': player_ids,
                  'displayName': player_names, 'team': player_team_names, 'team_pos': player_teams,
-                 'ind_eppa1': ind_eppa1, 'ind_eppa2': ind_eppa2, 'ind_eppa1_wo_value': ind_eppa1_wo_value, 'ind_eppa2_wo_value': ind_eppa2_wo_value},
+                 'ind_eppa1': ind_eppa1, 'ind_eppa1_wo_value': ind_eppa1_wo_value},
                 index=player_ids)
 
             off_team_name = play_df.loc[play_df.team_pos == 'OFF'].teamAbbr.iloc[0]
             def_team_name = play_df.loc[play_df.team_pos == 'DEF'].teamAbbr.iloc[0]
 
-            row = {'gameId': game_id, 'playId': play_id, 'frameId': frame_id, 'frames_after_snap': t, 'off_team': off_team_name,
-                   'def_team': def_team_name, 'eppa1_tot': eppa_ppc.sum(),
-                   'eppa2_tot': eppa_pint.sum(),
-                   'eppa3_tot': eppa3.sum(),
-                   'eppa4_tot': eppa4.sum(),
-                   'eppa1_wo_value': eppa_wo_value_ppc.sum(),
-                   'eppa2_wo_value': eppa_wo_value_pint.sum(),
-                   'eppa1_wo_trans': eppa_wo_trans.mean()}
+            # fill out passes df
+            row = {'gameId': game_id, 'playId': play_id, 'frameId': frame_id, 'frames_after_snap': t,
+                   'off_team': off_team_name, 'def_team': def_team_name, 'eppa1_tot': eppa1.sum(), 'eppa2_tot': eppa2.sum(),
+                   'maxEppa1Val': maxEppa1Val, 'maxEppa2Val': maxEppa2Val, 'xepa_inc': xepa_inc}
 
-            for name, arr in {'eppa1': eppa_ppc, 'eppa2': eppa_pint, 'ppc_off': ppc_off, 'ppc_def': ppc_def, 'eppa_wo_trans': eppa_wo_trans,
-                              'eppa1_wo_value': eppa_wo_value_ppc, 'eppa2_wo_value': eppa_wo_value_pint}.items():
+            for name, arr in {'eppa1': eppa1, 'eppa2': eppa2, 'ppc_off': ppc_off, 'catch_prob': catch_prob, 'eppa1_pass_val': eppa1_pass_val,
+                              'eppa2_pass_val': eppa2_pass_val, 'eppa1_wo_value': eppa1_wo_value, 'eppa2_wo_value': eppa2_wo_value}.items():
                 f, T_idx = np.unravel_index(arr.argmax(), arr.shape)
                 end_x, end_y = field_locs[f]
                 row[f"max_{name}_x"] = end_x
                 row[f"max_{name}_y"] = end_y
                 row[f"max_{name}_T"] = T[T_idx]
+                row[f"max_{name}_catch_prob"] = catch_prob[f, T_idx]
                 row[f"max_{name}_ppc_off"] = ppc_off[f, T_idx]
                 row[f"max_{name}_pint_off"] = p_int_off[f, T_idx]
                 row[f"max_{name}_ppc_def"] = ppc_def[f, T_idx]
                 row[f"max_{name}_pint_def"] = p_int_def[f, T_idx]
                 row[f"max_{name}_xyac"] = xyac[f, T_idx]
-                row[f"max_{name}_xepa"] = xepa[f, T_idx]
-                row[f"max_{name}_trans_ppc"] = trans_ppc[f, T_idx]
-                row[f"max_{name}_trans_pint"] = trans_pint[f, T_idx]
+                row[f"max_{name}_xepa_comp"] = xepa_comp[f, T_idx]
+                row[f"max_{name}_trans"] = trans[f, T_idx]
                 row[f"max_{name}_trans_tof"] = h_trans_prob[f, T_idx]
-                row[f"max_{name}_eppa1"] = eppa_ppc[f, T_idx]
-                row[f"max_{name}_eppa2"] = eppa_pint[f, T_idx]
-                row[f"max_{name}_eppa_wo_trans"] = eppa_wo_trans[f, T_idx]
-                row[f"max_{name}_eppa1_wo_value"] = eppa_wo_value_ppc[f, T_idx]
-                row[f"max_{name}_eppa2_wo_value"] = eppa_wo_value_pint[f, T_idx]
+                row[f"max_{name}_eppa1"] = eppa1[f, T_idx]
+                row[f"max_{name}_eppa2"] = eppa2[f, T_idx]
+                row[f"max_{name}_eppa1_xval"] = eppa1_pass_val[f, T_idx]
+                row[f"max_{name}_eppa2_xval"] = eppa2_pass_val[f, T_idx]
+                row[f"max_{name}_eppa1_wo_value"] = eppa1_wo_value[f, T_idx]
+                row[f"max_{name}_eppa2_wo_value"] = eppa2_wo_value[f, T_idx]
 
             if frame_id == pass_forward_frame and true_pass_found:
                 row[f"true_x"] = true_x_idxd
                 row[f"true_y"] = true_y_idxd
                 row[f"true_T"] = true_T_idxd
+                row[f"true_catch_prob"] = catch_prob[true_f_idx, true_T_idx]
                 row[f"true_ppc_off"] = ppc_off[true_f_idx, true_T_idx]
                 row[f"true_pint_off"] = p_int_off[true_f_idx, true_T_idx]
                 row[f"true_ppc_def"] = ppc_def[true_f_idx, true_T_idx]
                 row[f"true_pint_def"] = p_int_def[true_f_idx, true_T_idx]
                 row[f"true_xyac"] = xyac[true_f_idx, true_T_idx]
-                row[f"true_xepa"] = xepa[true_f_idx, true_T_idx]
-                row[f"true_trans_ppc"] = trans_ppc[true_f_idx, true_T_idx]
-                row[f"true_trans_pint"] = trans_pint[true_f_idx, true_T_idx]
+                row[f"true_xepa1"] = ppc_off[true_f_idx, true_T_idx]*xepa_comp[true_f_idx, true_T_idx]+(1-ppc_off[true_f_idx, true_T_idx])*xepa_inc
+                row[f"true_xepa2"] = catch_prob[true_f_idx, true_T_idx]*xepa_comp[true_f_idx,
+                                                                                  true_T_idx]+(1-catch_prob[true_f_idx, true_T_idx])*xepa_inc
+                row[f"true_trans_ppc"] = trans[true_f_idx, true_T_idx]
                 row[f"true_trans_tof"] = h_trans_prob[true_f_idx, true_T_idx]
-                row[f"true_eppa1"] = eppa_ppc[true_f_idx, true_T_idx]
-                row[f"true_eppa2"] = eppa_pint[true_f_idx, true_T_idx]
-                row[f"true_eppa_wo_trans"] = eppa_wo_trans[true_f_idx, true_T_idx]
-                row[f"true_eppa1_wo_value"] = eppa_wo_value_ppc[true_f_idx, true_T_idx]
-                row[f"true_eppa2_wo_value"] = eppa_wo_value_pint[true_f_idx, true_T_idx]
+                row[f"true_eppa1"] = eppa1[true_f_idx, true_T_idx]
+                row[f"true_eppa2"] = eppa2[true_f_idx, true_T_idx]
+                row[f"true_eppa1_xval"] = eppa1_pass_val[true_f_idx, true_T_idx]
+                row[f"true_eppa2_xval"] = eppa2_pass_val[true_f_idx, true_T_idx]
+                row[f"true_eppa1_wo_value"] = eppa1_wo_value[true_f_idx, true_T_idx]
+                row[f"true_eppa2_wo_value"] = eppa2_wo_value[true_f_idx, true_T_idx]
 
             passes_df = pd.DataFrame(row, index=[t])
 
@@ -641,20 +664,20 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
                 'frameId': frame_id,
                 'ball_end_x': field_locs[:, 0],
                 'ball_end_y': field_locs[:, 1],
-                'eppa1': eppa_ppc.max(axis=1),
-                'eppa2': eppa_pint.max(axis=1),
-                'eppa3': eppa3.max(axis=1),
-                'eppa4': eppa3.max(axis=1),
+                'eppa1': eppa1.max(axis=1),
+                'eppa2': eppa2.max(axis=1),
                 'p_int_off_only': p_int_off_only.max(axis=1),
                 'p_int_off': p_int_off.max(axis=1),
                 # 'p_int_adj_off': np.max(p_int_adj, axis=(1, 2), where=(player_teams=='OFF')),
                 'ppc_off': ppc_off.max(axis=1),
                 'ppc_def': ppc_def.max(axis=1),
-                'eppa1_wo_value': eppa_wo_value_ppc.max(axis=1),
-                'eppa2_wo_value': eppa_wo_value_pint.max(axis=1),
-                'eppa_wo_trans': eppa_wo_trans.max(axis=1),
+                'eppa1_wo_value': eppa1_wo_value.max(axis=1),
+                'eppa2_wo_value': eppa2_wo_value.max(axis=1),
+                'eppa1_wo_trans': eppa1_pass_val.max(axis=1),
+                'eppa2_wo_trans': eppa2_pass_val.max(axis=1),
                 'xyac': xyac.max(axis=1),
-                'xepa': xepa.max(axis=1),
+                'xepa_comp': xepa_comp.max(axis=1),
+                'xepa_inc': xepa_inc,
             })
             field_df.loc[field_df.ball_end_x < ball_start[0]-10, :] = np.nan  # remove backward passes
         # breakpoint()
@@ -664,8 +687,11 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
     player_stats_df = pd.DataFrame()
     passes_df = pd.DataFrame()
     proj_df = pd.DataFrame()
-    #for fid in tqdm(range(ball_snap_frame+1, pass_forward_frame+1)):
-    for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
+    if pass_forward_frame < (min_t_frame+ball_snap_frame):
+        return play_df, field_dfs, passes_df, player_stats_df
+
+    for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
+        # for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
         field_df, passes, player_stats, projs = frame_eppa(fid)
         field_dfs = field_dfs.append(field_df, ignore_index=True)
         passes_df = passes_df.append(passes, ignore_index=True)
@@ -696,7 +722,7 @@ fails = []
 Path(out_dir_path.format(f'{WEEK}')).mkdir(parents=True, exist_ok=True)
 with open(out_dir_path.format(f'{WEEK}/errors.txt'), 'w+') as f:
     # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
-    for (gid, pid) in tqdm(plays[:3]):
+    for (gid, pid) in tqdm(plays):
         dir = out_dir_path.format(f'{WEEK}/{gid}/{pid}')
         if os.path.exists(dir) and False:
             print(f'EXISTS: {gid}, {pid}')
