@@ -273,7 +273,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
         # intercept vector between each player and field location
         int_d_vec = field_locs[:, None, :] - reaction_player_locs  # F, J, 2
-        int_d_mag = np.linalg.norm(int_d_vec, axis=2)  # F, J
+        int_d_mag = np.linalg.norm(int_d_vec, axis=2) + 1e-3  # F, J
         int_d_theta = np.arctan2(int_d_vec[..., 1], int_d_vec[..., 0])
         # projecting player velocity on d_vec to get initial speed along d_vec
         int_s0 = np.clip(np.sum(int_d_vec*reaction_player_vels, axis=2)/int_d_mag, -params.s_max, params.s_max)  # F, J,
