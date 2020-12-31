@@ -269,20 +269,20 @@ class CompProbModel(torch.nn.Module):
         # define parameters and whether or not to optimize
         self.tti_sigma = Parameter(torch.tensor([tti_sigma]),
                 requires_grad=(self.tuning == TuningParam.lamb)).float()
-        #self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=(self.tuning == TuningParam.lamb)).float()
-        self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=False).float()
-        self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
-                requires_grad=(self.tuning == TuningParam.lamb)).float()
+        self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=(self.tuning == TuningParam.lamb)).float()
+        #self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=False).float()
         #self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
-        #        requires_grad=False).float()
+        #        requires_grad=(self.tuning == TuningParam.lamb)).float()
+        self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
+                requires_grad=False).float()
         self.tti_lambda_def = Parameter(torch.tensor([tti_lambda_def]),
                 requires_grad=(self.tuning == TuningParam.lamb)).float()
         self.ppc_alpha = Parameter(torch.tensor([ppc_alpha]),
                 requires_grad=(self.tuning == TuningParam.alpha)).float()
-        #self.a_max = Parameter(torch.tensor([a_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
-        #self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
-        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=False).float()
-        self.s_max = Parameter(torch.tensor([s_max]), requires_grad=False).float()
+        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
+        self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
+        #self.a_max = Parameter(torch.tensor([a_max]), requires_grad=False).float()
+        #self.s_max = Parameter(torch.tensor([s_max]), requires_grad=False).float()
         self.reax_t = Parameter(torch.tensor([0.0001]), requires_grad=False).float()
         self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed]), requires_grad=False).float()
         self.g = Parameter(torch.tensor([10.72468]), requires_grad=False) #y/s/s
@@ -303,7 +303,7 @@ class CompProbModel(torch.nn.Module):
         self.hist_x_min, self.hist_x_max = -9, 70
         self.hist_y_min, self.hist_y_max = -39, 40
         self.hist_t_min, self.hist_t_max = 10, 63
-        self.T_given_Ls_df = pd.read_pickle('in/T_given_L.pkl')
+        self.T_given_Ls_df = pd.read_csv('in/T_given_L.csv')
 
     def get_hist_trans_prob(self, frame):
         B = len(frame)
@@ -446,10 +446,12 @@ class CompProbModel(torch.nn.Module):
         # calculate probability that at least 1 def player gets in position to make play
         p_int_def = 1 - torch.prod(1 - p_int_adj * (1 - player_mask), dim=-1)
 
-        # TODO figure out indexing
-        # mutiply offensive probabilities by 1-p_int_def and make all def player probabilities 0
-        p_int_adj[:, :, :, (player_teams.flatten() == 1)] = p_int_adj[:, :, :, (player_teams.flatten() == 1)] * \
-                (1 - p_int_def.unsqueeze(-1))
+        if self.use_ppc:
+            # mutiply offensive probabilities by 1-p_int_def and make all def player probabilities 0
+            p_int_adj[:, :, :, (player_teams.flatten() == 1)] = p_int_adj[:, :, :, (player_teams.flatten() == 1)] * \
+                    (1 - p_int_def.unsqueeze(-1))
+        else:
+            p_int_adj = p_int_adj * (1 - p_int_def.unsqueeze(-1)) * player_teams.view(player_teams.size(0), 1, 1, -1)
 
         if self.tuning == TuningParam.av:
             # collapse extra dims
@@ -594,7 +596,7 @@ if __name__ == '__main__':
     loader = torch.utils.data.DataLoader(ds, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True)
 
     model = CompProbModel(tti_sigma=0.5, a_max=8.0, s_max=10.0, tti_lambda_off=1.0,
-            tti_epsilon=0.0001, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
+            tti_epsilon=0.1, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
 
     if args.continue_training is not None:
         model.load_state_dict(torch.load(args.continue_training))
@@ -651,6 +653,7 @@ if __name__ == '__main__':
 
     print('a_max', model.a_max)
     print('s_max', model.s_max)
+    print('reax_t', model.reax_t)
     print('sigma', model.tti_sigma)
     print('epsilon', model.tti_epsilon)
     print('lambda', model.tti_lambda_off)
