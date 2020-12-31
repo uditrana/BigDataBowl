@@ -11,7 +11,7 @@ import pandas as pd
 from pathlib import Path
 import torch
 
-WEEK_START = 2
+WEEK_START = 1
 WEEK_END = 6
 
 # file loading and prep
@@ -138,16 +138,16 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         true_T_frames = pass_arrived_frame - pass_forward_frame
         true_x, true_y = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'),
                                      ['x', 'y']].iloc[0].to_numpy(dtype=dt)
-        print(f"True Pass: t: {pass_forward_frame} x:{true_x} y:{true_y} T:{true_T_frames/10}")
+        #print(f"True Pass: t: {pass_forward_frame} x:{true_x} y:{true_y} T:{true_T_frames/10}")
         true_T_idx = np.rint(true_T_frames).astype(int)-1
         true_x_idx = (true_x).astype(int)
         true_y_idx = (true_y).astype(int)+1
         true_f_idx = np.ravel_multi_index((true_y_idx, true_x_idx), xx.shape)
         (true_x_idxd, true_y_idxd), true_T_idxd = field_locs[true_f_idx], T[true_T_idx]
-        print(f"True Pass idxs: t: {pass_forward_frame} x:{true_x_idx} y:{true_y_idx} f:{true_f_idx} T:{true_T_idx}")
-        print(f"True Pass idxd: t: {pass_forward_frame} x:{true_x_idxd} y:{true_y_idxd} T:{true_T_idxd}")
-    else:
-        print(f"No True Pass Found: No pass_arrived event \n")
+        #print(f"True Pass idxs: t: {pass_forward_frame} x:{true_x_idx} y:{true_y_idx} f:{true_f_idx} T:{true_T_idx}")
+        #print(f"True Pass idxd: t: {pass_forward_frame} x:{true_x_idxd} y:{true_y_idxd} T:{true_T_idxd}")
+    #else:
+    #    print(f"No True Pass Found: No pass_arrived event \n")
 
     # per play epa model
     def getEPAModel():
@@ -721,8 +721,9 @@ for week in range(WEEK_START, WEEK_END):
         # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
         for (gid, pid) in tqdm(plays):
             dir = out_dir_path.format(f'{week}/{gid}/{pid}')
-            if os.path.exists(dir) and False:
-                print(f'EXISTS: {gid}, {pid}')
+            if os.path.exists(dir):
+                pass
+                #print(f'EXISTS: {gid}, {pid}')
             else:
                 try:
                     play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=False)
@@ -730,8 +731,8 @@ for week in range(WEEK_START, WEEK_END):
                     fails.append((gid, pid))
                     f.write(f"\nERROR: {gid}, {pid}\n")
                     f.write(traceback.format_exc()+'\n\n\n')
-                    print(f"ERROR: {gid}, {pid}. {e}")
-        print(len(plays))
-        print(len(fails))
+                    #print(f"ERROR: {gid}, {pid}. {e}")
+        #print(len(plays))
+        #print(len(fails))
         f.write(f"{len(fails)} out of {len(plays)}")
         f.write(str(fails))
