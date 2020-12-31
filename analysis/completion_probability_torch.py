@@ -257,7 +257,7 @@ class PlaysDataset(torch.utils.data.Dataset):
 
 # Completion Probability Model
 class CompProbModel(torch.nn.Module):
-    def __init__(self, a_max=7.25, s_max=9.25, avg_ball_speed=20.0, tti_sigma=0.5, tti_epsilon=0.0,
+    def __init__(self, a_max=7.25, s_max=9.25, reax_t=0.0001, avg_ball_speed=20.0, tti_sigma=0.5, tti_epsilon=0.0,
             tti_lambda_off=1.0, tti_lambda_def=1.0, ppc_alpha=1.0, tuning=None, use_ppc=False, use_cuda=False):
         super().__init__()
         # define self.tuning
@@ -269,8 +269,8 @@ class CompProbModel(torch.nn.Module):
         # define parameters and whether or not to optimize
         self.tti_sigma = Parameter(torch.tensor([tti_sigma]),
                 requires_grad=(self.tuning == TuningParam.lamb or self.tuning == TuningParam.sigma)).float()
-        self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=(self.tuning == TuningParam.lamb)).float()
-        #self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=False).float()
+        #self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=(self.tuning == TuningParam.lamb)).float()
+        self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=False).float()
         #self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
         #        requires_grad=(self.tuning == TuningParam.lamb)).float()
         self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
@@ -283,7 +283,7 @@ class CompProbModel(torch.nn.Module):
         self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
         #self.a_max = Parameter(torch.tensor([a_max]), requires_grad=False).float()
         #self.s_max = Parameter(torch.tensor([s_max]), requires_grad=False).float()
-        self.reax_t = Parameter(torch.tensor([0.0001]), requires_grad=False).float()
+        self.reax_t = Parameter(torch.tensor([reax_t]), requires_grad=False).float()
         self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed]), requires_grad=False).float()
         self.g = Parameter(torch.tensor([10.72468]), requires_grad=False) #y/s/s
         self.z_max = Parameter(torch.tensor([3.]), requires_grad=False)
