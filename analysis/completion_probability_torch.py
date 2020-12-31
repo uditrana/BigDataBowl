@@ -268,7 +268,7 @@ class CompProbModel(torch.nn.Module):
 
         # define parameters and whether or not to optimize
         self.tti_sigma = Parameter(torch.tensor([tti_sigma]),
-                requires_grad=(self.tuning == TuningParam.lamb)).float()
+                requires_grad=(self.tuning == TuningParam.lamb or self.tuning == TuningParam.sigma)).float()
         self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=(self.tuning == TuningParam.lamb)).float()
         #self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=False).float()
         #self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
@@ -596,8 +596,8 @@ if __name__ == '__main__':
     ds = PlaysDataset(data_dir=args.data_dir, wk=wk, all_weeks=all_weeks, tuning=TUNING)
     loader = torch.utils.data.DataLoader(ds, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True)
 
-    model = CompProbModel(tti_sigma=0.5, a_max=8.0, s_max=10.0, tti_lambda_off=1.0,
-            tti_epsilon=0.1, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
+    model = CompProbModel(tti_sigma=0.5, a_max=7.5, s_max=8.5, tti_lambda_off=1.0,
+            tti_epsilon=0.0001, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
 
     if args.continue_training is not None:
         model.load_state_dict(torch.load(args.continue_training))
