@@ -726,7 +726,7 @@ for week in range(WEEK_START, WEEK_END):
                 #print(f'EXISTS: {gid}, {pid}')
             else:
                 try:
-                    play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=False)
+                    play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=True)
                 except Exception as e:
                     fails.append((gid, pid))
                     f.write(f"\nERROR: {gid}, {pid}\n")
