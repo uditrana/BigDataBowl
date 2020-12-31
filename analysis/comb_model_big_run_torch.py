@@ -71,24 +71,28 @@ out_dir_path = '../output/{}'  # for cloud runs
 def params(): return None  # create an empty object to add params
 
 
+min_t_frame = 14
+max_t_frame = 47
 params.a_max = 7.67
 params.s_max = 9.42
 # params.reax_t = params.s_max/params.a_max
-params.reax_t = 0.
+params.reax_t = 0.0
 params.tti_sigma = 0.31
+# params.tti_sigma = 0.45
 params.cell_length = 1
 params.alpha = 1.2
 params.z_min = 1
 params.z_max = 3
 params.catch_lambda = 0.25
-vars(params)
 
 dt = np.float64
 dt_torch = torch.float64
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+
 def torchify(np_arr):
     return torch.from_numpy(np_arr).to(device)
+
 
 # model constants
 T = np.linspace(0.1, 4, 40, dtype=dt)
@@ -180,7 +184,8 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         epa_df_incomp['yardline_100'] = np.where(epa_df_incomp.down5 == 1, 100-epa_df_incomp['yardline_100'], epa_df_incomp['yardline_100'])
         epa_df_incomp['ydstogo'] = np.where(epa_df_incomp.down5 == 1, 10, epa_df_incomp['ydstogo'])
         epa_df_incomp['down1'] = np.where(epa_df_incomp.down5 == 1, 1, epa_df_incomp['down1'])
-        dtest = xgb.DMatrix(epa_df_incomp[cols_when_model_builds_ep])  # treelite_runtime.Batch.from_npy2d(epa_df_incomp[cols_when_model_builds_ep].values)
+        # treelite_runtime.Batch.from_npy2d(epa_df_incomp[cols_when_model_builds_ep].values)
+        dtest = xgb.DMatrix(epa_df_incomp[cols_when_model_builds_ep])
         ypred = epa_predictor.predict(dtest)
         ep = np.sum(ypred*epvals, axis=1)
         epa_df['xep_inc'] = ep
@@ -384,7 +389,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             ind_p_int_traj_dt = ind_p_int_traj_dt.reshape((*traj_locs_x_idx.shape), len(reaction_player_locs))
             # account for ball height on traj and normalize each locations int probability
             lambda_z = torch.where((traj_locs_z < params.z_max) & (traj_locs_z > params.z_min),
-                                1, 0)  # F, T, T # maybe change this to a normal distribution
+                                   1, 0)  # F, T, T # maybe change this to a normal distribution
             ind_p_int_traj_dt = ind_p_int_traj_dt * lambda_z[:, :, :, None]
             # p_int_traj_sum = p_int_traj.sum(dim=-1)
 
@@ -434,8 +439,8 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
             # assert np.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
             return off_p_int_pass.detach().cpu().numpy(),\
-                    def_p_int_pass.detach().cpu().numpy(),\
-                        ind_p_int_pass.detach().cpu().numpy()
+                def_p_int_pass.detach().cpu().numpy(),\
+                ind_p_int_pass.detach().cpu().numpy()
 
         def get_xyac():
             x_proj_def = x_proj[:, :, player_def]  # F, T, J
@@ -687,7 +692,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
     passes_df = pd.DataFrame()
     proj_df = pd.DataFrame()
     if pass_forward_frame < (min_t_frame+ball_snap_frame):
-        pass
+        return play_df, field_dfs, passes_df, player_stats_df
 
     # for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
     for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):

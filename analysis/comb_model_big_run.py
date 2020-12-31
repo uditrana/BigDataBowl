@@ -126,14 +126,14 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
         true_T_frames = pass_arrived_frame - pass_forward_frame
         true_x, true_y = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'),
                                      ['x', 'y']].iloc[0].to_numpy(dtype=dt)
-        print(f"True Pass: t: {pass_forward_frame} x:{true_x} y:{true_y} T:{true_T_frames/10}")
+        # print(f"True Pass: t: {pass_forward_frame} x:{true_x} y:{true_y} T:{true_T_frames/10}")
         true_T_idx = np.rint(true_T_frames).astype(int)-1
         true_x_idx = (true_x).astype(int)
         true_y_idx = (true_y).astype(int)+1
         true_f_idx = np.ravel_multi_index((true_y_idx, true_x_idx), xx.shape)
         (true_x_idxd, true_y_idxd), true_T_idxd = field_locs[true_f_idx], T[true_T_idx]
-        print(f"True Pass idxs: t: {pass_forward_frame} x:{true_x_idx} y:{true_y_idx} f:{true_f_idx} T:{true_T_idx}")
-        print(f"True Pass idxd: t: {pass_forward_frame} x:{true_x_idxd} y:{true_y_idxd} T:{true_T_idxd}")
+        # print(f"True Pass idxs: t: {pass_forward_frame} x:{true_x_idx} y:{true_y_idx} f:{true_f_idx} T:{true_T_idx}")
+        # print(f"True Pass idxd: t: {pass_forward_frame} x:{true_x_idxd} y:{true_y_idxd} T:{true_T_idxd}")
     else:
         print(f"No True Pass Found: No pass_arrived event \n")
 
@@ -675,7 +675,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
     passes_df = pd.DataFrame()
     proj_df = pd.DataFrame()
     if pass_forward_frame < (min_t_frame+ball_snap_frame):
-        pass
+        return play_df, field_dfs, passes_df, player_stats_df
 
     for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
         # for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
