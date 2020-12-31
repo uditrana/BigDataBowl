@@ -708,6 +708,10 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
 # main loop
 for week in range(WEEK_START, WEEK_END):
+    track_df = pd.read_csv(
+        path_shared.format(
+            f'week{week}_norm.csv',
+            usecols=['nflId', 'displayName', 'position', 'team_pos', 'x', 'y', 'v_x', 'v_y', 'v_mag', 'v_theta', 'a_x', 'a_y', 'a_mag', 'a_theta']))
     plays = sorted(list(set(map(lambda x: (x[0].item(), x[1].item()), track_df.groupby(
         ['gameId', 'playId'], as_index=False).first()[['gameId', 'playId']].to_numpy()))))
 
