@@ -117,13 +117,15 @@ t_min, t_max = 10, 63
 
 # epa/xyac model loading
 bst = joblib.load("./in/xyac_model.model")
+bst.set_param({'predictor': 'gpu_predictor'})
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
-xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel.so')
+xyac_predictor = bst # treelite_runtime.Predictor('./in/xyacmymodel.so')
 epa_model = joblib.load("./in/epa_model_rishav_no_time.model")
+epa_model.set_param({'predictor': 'gpu_predictor'})
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
-epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel.so')
+epa_predictor = epa_model  # treelite_runtime.Predictor('./in/epa_no_time_mymodel.so')
 
 
 def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False):
@@ -166,7 +168,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
         first_df = pd.DataFrame(test)
 
-        dtest = treelite_runtime.Batch.from_npy2d(first_df[cols_when_model_builds_ep].values)
+        dtest = xgb.DMatrix(first_df[cols_when_model_builds_ep])  # treelite_runtime.Batch.from_npy2d(first_df[cols_when_model_builds_ep].values)
         ypred = epa_predictor.predict(dtest)
         ep = np.sum(ypred*epvals, axis=1)
 
@@ -201,7 +203,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
 
         ### UPDATE EPA VARIABLES ###
 
-        dtest = treelite_runtime.Batch.from_npy2d(epa_df[cols_when_model_builds_ep].values)
+        dtest = xgb.DMatrix(epa_df[cols_when_model_builds_ep])  # treelite_runtime.Batch.from_npy2d(epa_df[cols_when_model_builds_ep].values)
         ypred = epa_predictor.predict(dtest)
         ep = np.sum(ypred*epvals, axis=1)
         epa_df['xep'] = ep  # ep after play
@@ -479,7 +481,7 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
             })
             # CALCULTE XYAC
 
-            dtest = treelite_runtime.Batch.from_npy2d(field_df[cols_when_model_builds].values)
+            dtest = xgb.DMatrix(field_df[cols_when_model_builds])  # treelite_runtime.Batch.from_npy2d(field_df[cols_when_model_builds].values)
             ypred = xyac_predictor.predict(dtest)
             y_vals = np.sum(ypred*value_array, axis=1)
             field_df['xyac'] = y_vals
