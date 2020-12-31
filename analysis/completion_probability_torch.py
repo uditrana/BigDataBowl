@@ -26,7 +26,7 @@ class PlaysDataset(torch.utils.data.Dataset):
 
         if all_weeks:
             all_data = []
-            for week in range(5, 10):
+            for week in range(5, 8):
                 all_data.append(pd.read_csv(os.path.join(data_dir, 'week%d_norm.csv' % week)))
 
             tracking_df = pd.concat(all_data)
@@ -561,7 +561,8 @@ if __name__ == '__main__':
     parser.add_argument('-e', '--epochs', default=5, help='number of training epochs', type=int)
     parser.add_argument('-t', '--tuning', default=None, help='parameter to tune (None if running in eval)')
     parser.add_argument('-s', '--split', default='1', help='week number to run on or all')
-    parser.add_argument('-p', '--ppc', default=True, help='whether to use ppc (only relevant for tuning alpha)')
+    parser.add_argument('-p', '--ppc', action='store_true', help='whether to use ppc (only relevant for tuning alpha)')
+    parser.add_argument('-c', '--continue_training', default=None, help='model to continue training')
     args = parser.parse_args()
 
     # Initialize Dataset, Model and Run Training Loop
@@ -594,6 +595,10 @@ if __name__ == '__main__':
 
     model = CompProbModel(tti_sigma=0.5, a_max=8.0, s_max=10.0, tti_lambda_off=1.0,
             tti_epsilon=0.0001, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
+
+    if args.continue_training is not None:
+        model.load_state_dict(torch.load(args.continue_training))
+
     if TUNING == TuningParam.av:
         loss_fn = torch.nn.MSELoss()
     else:
@@ -636,7 +641,6 @@ if __name__ == '__main__':
             # step gradient
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
 
             optimizer.step()
 
