@@ -17,7 +17,7 @@ import torch
 WEEK = 1
 
 # file loading and prep
-path_shared = '~/Downloads/nfl-big-data-bowl-2021/{}'
+path_shared = '../data/{}'
 
 games_df = pd.read_csv(path_shared.format('games.csv'))
 plays_df = pd.read_csv(path_shared.format('plays.csv'))
@@ -47,25 +47,25 @@ pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team'])
 out_dir_path = '../output/{}'  # for cloud runs
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
-# bst = joblib.load("./in/xyac_model.model")
-# xgb.plot_importance(bst)
-# scores = bst.get_score(importance_type='gain')
-# print(scores.keys())
-# cols_when_model_builds = bst.feature_names
-# model = treelite.Model.from_xgboost(bst)
-# toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
-#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
-
-# bst = joblib.load("./in/epa_model_rishav_no_time.model")
-# xgb.plot_importance(bst)
-# scores = bst.get_score(importance_type='gain')
-# print(scores.keys())
-# cols_when_model_builds = bst.feature_names
-# model = treelite.Model.from_xgboost(bst)
-# toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
-#                  params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+#bst = joblib.load("./in/xyac_model.model")
+#xgb.plot_importance(bst)
+#scores = bst.get_score(importance_type='gain')
+#print(scores.keys())
+#cols_when_model_builds = bst.feature_names
+#model = treelite.Model.from_xgboost(bst)
+#toolchain = 'gcc'
+#model.export_lib(toolchain=toolchain, libpath='./in/xyacmymodel.so',
+#                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
+#
+#bst = joblib.load("./in/epa_model_rishav_no_time.model")
+#xgb.plot_importance(bst)
+#scores = bst.get_score(importance_type='gain')
+#print(scores.keys())
+#cols_when_model_builds = bst.feature_names
+#model = treelite.Model.from_xgboost(bst)
+#toolchain = 'gcc'
+#model.export_lib(toolchain=toolchain, libpath='./in/epa_no_time_mymodel.so',
+#                 params={'parallel_comp': 32}, verbose=True)  # .so for ubuntu, .dylib for mac
 
 
 def params(): return None  # create an empty object to add params
@@ -109,7 +109,7 @@ field_locs_torch = torchify(field_locs)
 
 # historical trans model inputs/params
 L_given_ts = np.load('in/L_given_t.npy')
-T_given_Ls = pd.read_pickle('in/T_given_L.pkl')['p'].values.reshape(60, len(T))  # (61, T)
+T_given_Ls_df = pd.read_csv('in/T_given_L.csv')
 # from L_given_t in historical notebook
 x_min, x_max = -9, 70
 y_min, y_max = -39, 40
@@ -119,11 +119,11 @@ t_min, t_max = 10, 63
 bst = joblib.load("./in/xyac_model.model")
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
-xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel.dylib')
+xyac_predictor = treelite_runtime.Predictor('./in/xyacmymodel.so')
 epa_model = joblib.load("./in/epa_model_rishav_no_time.model")
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
-epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel.dylib')
+epa_predictor = treelite_runtime.Predictor('./in/epa_no_time_mymodel.so')
 
 
 def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False):
