@@ -1,9 +1,7 @@
 
 import traceback
 import os
-import treelite
 import random
-import treelite_runtime
 import joblib
 import xgboost as xgb
 from tqdm import tqdm
