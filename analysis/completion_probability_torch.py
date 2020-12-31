@@ -262,7 +262,7 @@ class CompProbModel(torch.nn.Module):
         super().__init__()
         # define self.tuning
         self.tuning = tuning
- 
+
         # define whether we are using cuda
         self.device = 'cuda' if use_cuda else 'cpu'
 
@@ -303,7 +303,9 @@ class CompProbModel(torch.nn.Module):
         self.hist_x_min, self.hist_x_max = -9, 70
         self.hist_y_min, self.hist_y_max = -39, 40
         self.hist_t_min, self.hist_t_max = 10, 63
-        self.T_given_Ls_df = pd.read_csv('in/T_given_L.csv')
+        self.T_given_Ls = Parameter(torch.from_numpy(
+            pd.read_csv('in/T_given_L.csv')['p'].values.reshape(61, len(self.T))
+        ).float(), requires_grad=False)  # (61, T); 61 diff pass distances
 
     def get_hist_trans_prob(self, frame):
         B = len(frame)
@@ -330,8 +332,7 @@ class CompProbModel(torch.nn.Module):
         reach_dist_int = torch.round(torch.linalg.norm(reach_vecs, dim=-1)).long()  # (B, F)
         reach_dist_in_bounds_idx = (reach_dist_int > 1) & (reach_dist_int <= 60)
         reach_dist_in_bounds = reach_dist_int[reach_dist_in_bounds_idx]  # 1d tensor
-        T_given_L_subset = torch.from_numpy(self.T_given_Ls_df.set_index('pass_dist').loc[reach_dist_in_bounds, 'p'].to_numpy()).float()\
-            .reshape(-1, len(self.T))  # (BF~, T) ; BF~ is subset of B*F that is in [1, 60] yds from ball
+        T_given_L_subset = self.T_given_Ls[reach_dist_in_bounds]  # (BF~, T) ; BF~ is subset of B*F that is in [1, 60] yds from ball
         T_given_L = torch.zeros(B*len(self.field_locs), len(self.T))  # (B, F, T)
         # fill in the subset of values computed above
         T_given_L[reach_dist_in_bounds_idx.flatten()] = T_given_L_subset
