@@ -109,7 +109,7 @@ field_locs_torch = torchify(field_locs)
 
 # historical trans model inputs/params
 L_given_ts = np.load('in/L_given_t.npy')
-T_given_Ls_df = pd.read_csv('in/T_given_L.csv')
+T_given_Ls = pd.read_csv('in/T_given_L.csv')['p'].values.reshape(60, len(T))  # (61, T)
 # from L_given_t in historical notebook
 x_min, x_max = -9, 70
 y_min, y_max = -39, 40
@@ -662,8 +662,8 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
     player_stats_df = pd.DataFrame()
     passes_df = pd.DataFrame()
     proj_df = pd.DataFrame()
-    for fid in tqdm(range(ball_snap_frame+1, pass_forward_frame+1)):
-        # for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
+    #for fid in tqdm(range(ball_snap_frame+1, pass_forward_frame+1)):
+    for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
         field_df, passes, player_stats, projs = frame_eppa(fid)
         field_dfs = field_dfs.append(field_df, ignore_index=True)
         passes_df = passes_df.append(passes, ignore_index=True)
@@ -694,7 +694,7 @@ fails = []
 Path(out_dir_path.format(f'{WEEK}')).mkdir(parents=True, exist_ok=True)
 with open(out_dir_path.format(f'{WEEK}/errors.txt'), 'w+') as f:
     # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
-    for (gid, pid) in tqdm(plays[:1]):
+    for (gid, pid) in tqdm(plays[:3]):
         dir = out_dir_path.format(f'{WEEK}/{gid}/{pid}')
         if os.path.exists(dir) and False:
             print(f'EXISTS: {gid}, {pid}')
