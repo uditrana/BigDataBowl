@@ -12,7 +12,8 @@ import pandas as pd
 from pathlib import Path
 
 
-WEEK = 1
+WEEK_START = 1
+WEEK_END = 2
 
 # file loading and prep
 path_shared = '../data/{}'
@@ -20,11 +21,7 @@ path_shared = '../data/{}'
 games_df = pd.read_csv(path_shared.format('games.csv'))
 plays_df = pd.read_csv(path_shared.format('plays.csv'))
 players_df = pd.read_csv(path_shared.format('players.csv'))
-track_df = pd.read_csv(
-    path_shared.format(
-        f'week{WEEK}_norm.csv',
-        usecols=['nflId', 'displayName', 'position', 'team_pos', 'x', 'y', 'v_x', 'v_y', 'v_mag', 'v_theta', 'a_x',
-                 'a_y', 'a_mag', 'a_theta']))
+
 pbp_2018 = pd.read_csv(path_shared.format('play_by_play_2018.csv'), low_memory=False)
 pbp_joined = pd.merge(plays_df, pbp_2018, how="left", left_on=["gameId", "playId"], right_on=["old_game_id", "play_id"])
 
@@ -69,19 +66,19 @@ out_dir_path = '../output/{}'  # for cloud runs
 def params(): return None  # create an empty object to add params
 
 
-params.a_max = 7.68
-params.s_max = 8.98
+min_t_frame = 14
+max_t_frame = 47
+params.a_max = 7.67
+params.s_max = 9.42
 # params.reax_t = params.s_max/params.a_max
-params.reax_t = 0.3
-params.tti_sigma = 0.3
+params.reax_t = 0.0
+params.tti_sigma = 0.31
 # params.tti_sigma = 0.45
 params.cell_length = 1
-params.alpha = 1.0
+params.alpha = 1.2
 params.z_min = 1
 params.z_max = 3
-params.epsilon = 0.0
-params.catch_lambda = 0.6
-vars(params)
+params.catch_lambda = 0.25
 
 dt = np.float64
 
@@ -680,8 +677,8 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
     if pass_forward_frame < (min_t_frame+ball_snap_frame):
         pass
 
-    # for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
-    for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
+    for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
+        # for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
         field_df, passes, player_stats, projs = frame_eppa(fid)
         field_dfs = field_dfs.append(field_df, ignore_index=True)
         passes_df = passes_df.append(passes, ignore_index=True)
@@ -702,29 +699,34 @@ def play_eppa(game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz
     return play_df, field_dfs, passes_df, player_stats_df
 
 
-plays = sorted(list(set(map(lambda x: (x[0].item(), x[1].item()), track_df.groupby(
-    ['gameId', 'playId'], as_index=False).first()[['gameId', 'playId']].to_numpy()))))
+for week in range(WEEK_START, WEEK_END):
+    track_df = pd.read_csv(
+        path_shared.format(
+            f'week{week}_norm.csv',
+            usecols=['nflId', 'displayName', 'position', 'team_pos', 'x', 'y', 'v_x', 'v_y', 'v_mag', 'v_theta', 'a_x', 'a_y', 'a_mag', 'a_theta']))
 
+    plays = sorted(list(set(map(lambda x: (x[0].item(), x[1].item()), track_df.groupby(
+        ['gameId', 'playId'], as_index=False).first()[['gameId', 'playId']].to_numpy()))))
 
-# plays = [(2018102806, 2425)]
+    # plays = [(2018102806, 2425)]
 
-fails = []
-Path(out_dir_path.format(f'{WEEK}')).mkdir(parents=True, exist_ok=True)
-with open(out_dir_path.format(f'{WEEK}/errors.txt'), 'w+') as f:
-    # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
-    for (gid, pid) in tqdm(plays[:1]):
-        dir = out_dir_path.format(f'{WEEK}/{gid}/{pid}')
-        if os.path.exists(dir) and False:
-            print(f'EXISTS: {gid}, {pid}')
-        else:
-            try:
-                play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=False)
-            except Exception as e:
-                fails.append((gid, pid))
-                f.write(f"\nERROR: {gid}, {pid}\n")
-                f.write(traceback.format_exc()+'\n\n\n')
-                print(f"ERROR: {gid}, {pid}. {e}")
-    print(len(plays))
-    print(len(fails))
-    f.write(f"{len(fails)} out of {len(plays)}")
-    f.write(str(fails))
+    fails = []
+    Path(out_dir_path.format(f'{week}')).mkdir(parents=True, exist_ok=True)
+    with open(out_dir_path.format(f'{week}/errors.txt'), 'w+') as f:
+        # for (gid, pid) in tqdm(random.sample(plays, len(plays))):
+        for (gid, pid) in tqdm(plays):
+            dir = out_dir_path.format(f'{week}/{gid}/{pid}')
+            if os.path.exists(dir):
+                print(f'EXISTS: {gid}, {pid}')
+            else:
+                try:
+                    play_eppa(gid, pid, viz_df=False, save_np=False, stats_df=True, viz_true_proj=True, save_all_dfs=True)
+                except Exception as e:
+                    fails.append((gid, pid))
+                    f.write(f"\nERROR: {gid}, {pid}\n")
+                    f.write(traceback.format_exc()+'\n\n\n')
+                    print(f"ERROR: {gid}, {pid}. {e}")
+        print(len(plays))
+        print(len(fails))
+        f.write(f"{len(fails)} out of {len(plays)}")
+        f.write(str(fails))
