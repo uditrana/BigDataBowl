@@ -45,7 +45,7 @@ colors = pd.read_csv(
 
 
 class AnimatePlay:
-    def __init__(self, play_df, plot_size_len, field_prob_df=None) -> None:
+    def __init__(self, play_df, plot_size_len, field_prob_df=None, viz_proj=False) -> None:
         """Initializes the datasets used to animate the play.
 
         Parameters
@@ -65,6 +65,7 @@ class AnimatePlay:
         self.YARD_PIXEL_COUNT = 70
 
         self._show_p_mass = type(field_prob_df) != type(None)
+        self._viz_proj = viz_proj
         self._field_prob_df = field_prob_df
         # self._CPLT = sns.color_palette("husl", 2)
         self._offense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'OFF']['teamAbbr'].iloc[0]]
@@ -167,11 +168,11 @@ class AnimatePlay:
             self._scat_field_pmass1 = self._ax_field.scatter(
                 [],
                 [],
-                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6, c=[])
-            self._scat_field_pmass2 = self._ax_field.scatter(
+                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6)
+            self._scat_field_vmass = self._ax_field.scatter(
                 [],
                 [],
-                s=self.YARD_PIXEL_COUNT, marker='s')
+                s=self.YARD_PIXEL_COUNT, marker='s', c=[])
 
         self._scat_offense = self._ax_offense.scatter(
             [],
@@ -250,16 +251,18 @@ class AnimatePlay:
                     np.vstack([[self._pass_arrival_loc[0], label_data.x], [self._pass_arrival_loc[1], label_data.y]]).T)
             elif label == 'OFF':
                 self._scat_offense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
-                self._scat_offense_proj.set_offsets(
-                    np.vstack([label_data.proj_x.fillna(-10), label_data.proj_y.fillna(-10)]).T)
-                # self._scat_offense_reax.set_offsets(
-                #     np.vstack([label_data.reax_x.fillna(-10), label_data.reax_y.fillna(-10)]).T)
+                if self._viz_proj:
+                    self._scat_offense_proj.set_offsets(
+                        np.vstack([label_data.proj_x.fillna(-10), label_data.proj_y.fillna(-10)]).T)
+                    # self._scat_offense_reax.set_offsets(
+                    #     np.vstack([label_data.reax_x.fillna(-10), label_data.reax_y.fillna(-10)]).T)
             elif label == 'DEF':
                 self._scat_defense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
-                self._scat_defense_proj.set_offsets(
-                    np.vstack([label_data.proj_x.fillna(-10), label_data.proj_y.fillna(-10)]).T)
-                # self._scat_defense_reax.set_offsets(
-                #     np.vstack([label_data.reax_x.fillna(-10), label_data.reax_y.fillna(-10)]).T)
+                if self._viz_proj:
+                    self._scat_defense_proj.set_offsets(
+                        np.vstack([label_data.proj_x.fillna(-10), label_data.proj_y.fillna(-10)]).T)
+                    # self._scat_defense_reax.set_offsets(
+                    #     np.vstack([label_data.reax_x.fillna(-10), label_data.reax_y.fillna(-10)]).T)
 
         # jersey_df = pos_df[pos_df.jerseyNumber.notnull()]
 
@@ -279,16 +282,16 @@ class AnimatePlay:
                     pass
                 try:
                     grayscale = 50
-                    self._scat_field_pmass2.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
-                                                       for p in np.clip(frame_prob_df['p_mass_2'], 0, 1)])
-                    self._scat_field_pmass2.set_offsets(
+                    self._scat_field_vmass.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
+                                                      for p in np.clip(frame_prob_df['v_mass'], 0, 1)])
+                    self._scat_field_vmass.set_offsets(
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
                 except:
                     pass
 
             # else:
             #     self._scat_field_pmass1.set_offsets()
-            #     self._scat_field_pmass2.set_offsets()
+            #     self._scat_field_vmass.set_offsets()
 
         for (index, row) in pos_df[pos_df.jerseyNumber.notnull()].reset_index().iterrows():
             row = row.fillna(-10)
@@ -296,8 +299,9 @@ class AnimatePlay:
             self._scat_jersey_list[index].set_text(row.position)
             self._scat_number_list[index].set_position((row.x, row.y+1.9))
             self._scat_number_list[index].set_text(int(row.jerseyNumber))
-            self._scat_number_proj_list[index].set_position((row.proj_x, row.proj_y+1.9))
-            self._scat_number_proj_list[index].set_text(int(row.jerseyNumber))
+            if self._viz_proj:
+                self._scat_number_proj_list[index].set_position((row.proj_x, row.proj_y+1.9))
+                self._scat_number_proj_list[index].set_text(int(row.jerseyNumber))
 
             self._scat_name_list[index].set_position((row.x, row.y-1.9))
             self._scat_name_list[index].set_text(row.displayName.split()[-1])
