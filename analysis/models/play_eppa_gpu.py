@@ -135,6 +135,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
     pass_arriveds = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'), 'frameId'].to_list()
     true_pass_found = len(pass_arriveds) > 0
     if true_pass_found:
+        true_pass_completed = ('pass_outcome_caught' in events) or ('pass_outcome_touchdown' in events)
         pass_arrived_frame = pass_arriveds[0]
         true_T_frames = pass_arrived_frame - pass_forward_frame
         true_x, true_y = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'), ['x', 'y']].iloc[0].to_numpy(dtype=dt)
@@ -673,6 +674,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 'ball_end_x': field_locs[:, 0],
                 'ball_end_y': field_locs[:, 1],
                 'eppa1': eppa1.max(axis=1),
+                'eppa1_val': eppa1_pass_val[np.arange(eppa1_pass_val.shape[0]),  eppa1.argmax(axis=1)],
                 # 'eppa2': eppa2.max(axis=1),
                 # 'p_int_off_only': p_int_off_only.max(axis=1),
                 'p_int_off': p_int_off.max(axis=1),

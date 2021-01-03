@@ -664,6 +664,7 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 'ball_end_x': field_locs[:, 0],
                 'ball_end_y': field_locs[:, 1],
                 'eppa1': eppa1.max(axis=1),
+                'eppa1_val': eppa1_pass_val[np.arange(eppa1_pass_val.shape[0]),  eppa1.argmax(axis=1)],
                 # 'eppa2': eppa2.max(axis=1),
                 # 'p_int_off_only': p_int_off_only.max(axis=1),
                 'p_int_off': p_int_off.max(axis=1),
