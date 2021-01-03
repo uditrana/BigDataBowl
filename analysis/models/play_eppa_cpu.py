@@ -106,19 +106,16 @@ cols_when_model_builds_ep = epa_model.feature_names
 epa_predictor = treelite_runtime.Predictor('models/in/epa_no_time_mymodel.so')
 
 
-def checkPlayIsNormal(play_df):
+def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
+                  out_dir_path='../output/{}', simulatePass=None):
+    play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
+
     events = set(play_df.event.unique())
     if 'pass_forward' not in events:
         raise ValueError('No Pass Forward in play')
     if 'fumble' in events:
         raise ValueError('Fumble in play')
-    return True
 
-
-def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
-                  out_dir_path='../output/{}', simulatePass=None):
-    play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
-    checkPlayIsNormal(play_df)
     ball_snap_frame = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'ball_snap')].frameId.iloc[0]
     pass_forward_frame = play_df.loc[(play_df.nflId == 0) & ((play_df.event == 'pass_forward') |
                                                              (play_df.event == 'pass_shovel'))].frameId.sort_values().iloc[0]
@@ -127,6 +124,7 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
     pass_arriveds = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'), 'frameId'].to_list()
     true_pass_found = len(pass_arriveds) > 0
     if true_pass_found:
+        true_pass_completed = ('pass_outcome_caught' in events) or ('pass_outcome_touchdown' in events)
         pass_arrived_frame = pass_arriveds[0]
         true_T_frames = pass_arrived_frame - pass_forward_frame
         true_x, true_y = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'), ['x', 'y']].iloc[0].to_numpy(dtype=dt)
@@ -142,8 +140,8 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         print(f"No True Pass Found: No pass_arrived event \n")
 
     if simulatePass != None:
-        true_x, true_y, true_T = simulatePass
-        print(f"Simming Pass: t: {pass_forward_frame} x:{true_x} y:{true_y} T:{true_T}")
+        sim_frame, true_x, true_y, true_T = simulatePass
+        print(f"Simming Pass: t: {sim_frame} x:{true_x} y:{true_y} T:{true_T}")
         true_T_idx = np.rint(true_T*10).astype(int)-1
         true_x_idx = np.clip(dt(true_x).astype(int), 0, len(xx[0])-1)  # this is a bug
         true_y_idx = np.clip(dt(true_y).astype(int)+1, 0, len(xx)-1)  # this is a bug
@@ -392,14 +390,14 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
             compl_all_p_int_traj_dt = 1-all_p_int_traj_dt  # F, T, T
             remaining_compl_p_int_traj_dt = np.cumprod(compl_all_p_int_traj_dt, axis=-1)  # F, T, T
             # maximum 0 because if it goes negative the pass has been caught by then and theres no residual probability
-            shift_compl_cumsum_dt = np.roll(remaining_compl_p_int_traj_dt, 1, axis=-1)  # F, T, T
-            shift_compl_cumsum_dt[:, :, 0] = 1
+            remaining_compl_p_int_traj_dt = np.roll(remaining_compl_p_int_traj_dt, 1, axis=-1)  # F, T, T
+            remaining_compl_p_int_traj_dt[:, :, 0] = 1
 
             # multiply residual prob by p_int at that location
             # all_completion_prob_dt = shift_compl_cumsum * all_p_int_traj  # F, T, T
             # off_completion_prob_dt = shift_compl_cumsum * off_p_int_traj  # F, T, T
             # def_completion_prob_dt = shift_compl_cumsum * def_p_int_traj  # F, T, T
-            ind_completion_prob_dt = shift_compl_cumsum_dt[:, :, :, None] * ind_p_int_traj_dt  # F, T, T, J
+            ind_completion_prob_dt = remaining_compl_p_int_traj_dt[:, :, :, None] * ind_p_int_traj_dt  # F, T, T, J
             # ind_completion_prob_last_frame = np.einsum('ijjk->ijk', ind_completion_prob_dt)  # F, T, J
             # def_completion_prob_last_frame = np.sum(ind_completion_prob_last_frame, axis=-1, keepdims=True, where=(player_teams == 'DEF'))  # F, T, 1
             # ind_completion_prob_last_frame_adj_off = np.multiply(ind_completion_prob_last_frame, 1-def_completion_prob_last_frame,
@@ -428,11 +426,12 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
             ind_p_int_pass = np.einsum('ijjk->ijk', ind_completion_prob)  # F, T, J
             # no_p_int_pass = 1-all_p_int_pass #F, T
 
-            off_p_int_pass = np.clip(np.sum(ind_p_int_pass, axis=-1, where=(player_teams == 'OFF')), 0., 1.)  # F, T
-            def_p_int_pass = np.clip(np.sum(ind_p_int_pass, axis=-1, where=(player_teams == 'DEF')), 0., 1.)  # F, T
+            off_p_int_pass = (1-np.prod((1-ind_p_int_pass[:, :, (player_teams == 'OFF')]), axis=-1))  # F, T
+            def_p_int_pass = (1-np.prod((1-ind_p_int_pass[:, :, (player_teams == 'DEF')]), axis=-1))  # F, T
 
             # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
             # assert np.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
+            # breakpoint()
             return off_p_int_pass, def_p_int_pass, ind_p_int_pass
 
         def get_xyac():
@@ -636,7 +635,7 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 row[f"max_{name}_eppa1_wo_value"] = eppa1_wo_value[f, T_idx]
                 # row[f"max_{name}_eppa2_wo_value"] = eppa2_wo_value[f, T_idx]
 
-            if frame_id == pass_forward_frame and true_pass_found:
+            if (true_pass_found and frame_id == pass_forward_frame) or (simulatePass and frame_id == sim_frame):
                 row[f"true_x"] = true_x_idxd
                 row[f"true_y"] = true_y_idxd
                 row[f"true_T"] = true_T_idxd
@@ -647,6 +646,7 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 row[f"true_pint_def"] = p_int_def[true_f_idx, true_T_idx]
                 row[f"true_xyac"] = xyac[true_f_idx, true_T_idx]
                 row[f"true_xepa_comp"] = xepa_comp[true_f_idx, true_T_idx]
+                row[f"true_xepa"] = xepa_comp[true_f_idx, true_T_idx] if true_pass_completed else xepa_inc
                 row[f"true_trans_ppc"] = trans[true_f_idx, true_T_idx]
                 row[f"true_trans_tof"] = h_trans_prob[true_f_idx, true_T_idx]
                 row[f"true_eppa1"] = eppa1[true_f_idx, true_T_idx]
@@ -689,13 +689,22 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
     if pass_forward_frame < (min_t_frame+ball_snap_frame):
         return play_df, field_dfs, passes_df, player_stats_df
 
-    for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
-        # for fid in tqdm(range(pass_forward_frame, pass_forward_frame+1)):
-        field_df, passes, player_stats, projs = frame_eppa(fid)
-        field_dfs = field_dfs.append(field_df, ignore_index=True)
-        passes_df = passes_df.append(passes, ignore_index=True)
-        player_stats_df = player_stats_df.append(player_stats, ignore_index=True)
-        proj_df = proj_df.append(projs, ignore_index=True)
+    if not simulatePass:
+        for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
+            # for fid in tqdm(range(pass_forward_frame, pass_forward_frame+1)):
+            field_df, passes, player_stats, projs = frame_eppa(fid)
+            field_dfs = field_dfs.append(field_df, ignore_index=True)
+            passes_df = passes_df.append(passes, ignore_index=True)
+            player_stats_df = player_stats_df.append(player_stats, ignore_index=True)
+            proj_df = proj_df.append(projs, ignore_index=True)
+    else:
+        for fid in tqdm(range(sim_frame, sim_frame+1)):
+            # for fid in tqdm(range(pass_forward_frame, pass_forward_frame+1)):
+            field_df, passes, player_stats, projs = frame_eppa(fid)
+            field_dfs = field_dfs.append(field_df, ignore_index=True)
+            passes_df = passes_df.append(passes, ignore_index=True)
+            player_stats_df = player_stats_df.append(player_stats, ignore_index=True)
+            proj_df = proj_df.append(projs, ignore_index=True)
 
     if true_pass_found & viz_true_proj:
         play_df = pd.merge(play_df, proj_df, on=['frameId', 'nflId'], how='left')

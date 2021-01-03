@@ -45,12 +45,12 @@ min_t_frame = 14
 max_t_frame = 47
 params.a_max = 7.67
 params.s_max = 9.42
-params.reax_t = 0.0
+params.reax_t = 0.2
 params.tti_sigma = 0.31
 params.alpha = 1.2
 params.z_min = 1
 params.z_max = 3
-params.def_beta = 0.25
+params.def_beta = 1
 
 # file loading and prep
 path_shared = '../data/{}'
@@ -117,19 +117,16 @@ cols_when_model_builds_ep = epa_model.feature_names
 epa_predictor = treelite_runtime.Predictor('models/in/epa_no_time_mymodel.so')
 
 
-def checkPlayIsNormal(play_df):
+def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
+                  out_dir_path='../output/{}', simulatePass=None):
+    play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
+
     events = set(play_df.event.unique())
     if 'pass_forward' not in events:
         raise ValueError('No Pass Forward in play')
     if 'fumble' in events:
         raise ValueError('Fumble in play')
-    return True
 
-
-def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
-                  out_dir_path='../output/{}'):
-    play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
-    checkPlayIsNormal(play_df)
     ball_snap_frame = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'ball_snap')].frameId.iloc[0]
     pass_forward_frame = play_df.loc[(play_df.nflId == 0) & ((play_df.event == 'pass_forward') |
                                                              (play_df.event == 'pass_shovel'))].frameId.sort_values().iloc[0]
@@ -140,8 +137,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
     if true_pass_found:
         pass_arrived_frame = pass_arriveds[0]
         true_T_frames = pass_arrived_frame - pass_forward_frame
-        true_x, true_y = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'),
-                                     ['x', 'y']].iloc[0].to_numpy(dtype=dt)
+        true_x, true_y = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'), ['x', 'y']].iloc[0].to_numpy(dtype=dt)
         #print(f"True Pass: t: {pass_forward_frame} x:{true_x} y:{true_y} T:{true_T_frames/10}")
         true_T_idx = np.rint(true_T_frames).astype(int)-1
         true_x_idx = np.clip((true_x).astype(int), 0, len(xx[0])-1)
@@ -152,6 +148,17 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         #print(f"True Pass idxd: t: {pass_forward_frame} x:{true_x_idxd} y:{true_y_idxd} T:{true_T_idxd}")
     # else:
     #    print(f"No True Pass Found: No pass_arrived event \n")
+
+    if simulatePass != None:
+        sim_frame, true_x, true_y, true_T = simulatePass
+        print(f"Simming Pass: t: {sim_frame} x:{true_x} y:{true_y} T:{true_T}")
+        true_T_idx = np.rint(true_T*10).astype(int)-1
+        true_x_idx = np.clip(dt(true_x).astype(int), 0, len(xx[0])-1)  # this is a bug
+        true_y_idx = np.clip(dt(true_y).astype(int)+1, 0, len(xx)-1)  # this is a bug
+        true_f_idx = np.ravel_multi_index((true_y_idx, true_x_idx), xx.shape)
+        (true_x_idxd, true_y_idxd), true_T_idxd = field_locs[true_f_idx], T[true_T_idx]
+        print(f"Sim Pass idxs: t: {pass_forward_frame} x:{true_x_idx} y:{true_y_idx} f:{true_f_idx} T:{true_T_idx}")
+        print(f"Sim Pass idxd: t: {pass_forward_frame} x:{true_x_idxd} y:{true_y_idxd} T:{true_T_idxd}")
 
     # per play epa model
     def getEPAModel():
@@ -298,12 +305,10 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         int_dT = T[None, :, None] - t_tot[:, None, :]  # F, T, J
         p_int = (1/(1. + np.exp(-np.pi/np.sqrt(3.0)/params.tti_sigma * int_dT, dtype=dt)))  # F, T, J
         p_int_adj = p_int.copy()
-        p_int_def = 1-np.prod((1-p_int_adj[:, :, player_def]), axis=-1)  # F, T,
+        p_int_def = torch.pow(1-np.prod((1-p_int_adj[:, :, player_def]), axis=-1), params.def_beta)  # F, T,
         p_int_adj[:, :, player_off] = p_int_adj[:, :, player_off]*(1-p_int_def[..., None])  # F, T, J
         p_int_off = 1-np.prod((1-p_int_adj[:, :, player_off]), axis=-1)  # F, T
         p_int_adj_torch = torchify(p_int_adj)
-
-        p_int_off_only = np.minimum(1.0, 1-np.prod((1-p_int[:, :, player_off]), axis=-1))
 
         # projected locations at T (F, T, J)
         d_proj = np.select(
@@ -327,7 +332,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         v_y_proj = s_proj*np.sin(int_d_theta[:, None, :])   # (F, T, J)
 
         # input: qb_loc (2,), t=frames_after_snap (int)
-        # output: P(L,T|t) int probability of each pass (F, T)
+        # output: (P(L,T)|t) int probability of each pass (F, T)
         def get_hist_trans_prob():
             """ P(L|t) """
             ball_start_idx = np.rint(ball_start).astype(int)
@@ -429,8 +434,9 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
             # def_p_int_pass = torch.einsum('ijj->ij', def_completion_prob)  # F, T
             ind_p_int_pass = torch.einsum('ijjk->ijk', ind_completion_prob)  # F, T, J
             # no_p_int_pass = 1-all_p_int_pass #F, T
-            off_p_int_pass = torch.clip(torch.sum(ind_p_int_pass * player_off_torch[None, None], dim=-1), 0., 1.)  # F, T
-            def_p_int_pass = torch.clip(torch.sum(ind_p_int_pass * player_def_torch[None, None], dim=-1), 0., 1.)  # F, T
+
+            off_p_int_pass = 1-torch.prod(1-ind_p_int_pass * player_off_torch[None, None], dim=-1)  # F, T
+            def_p_int_pass = 1-torch.prod(1-ind_p_int_pass * player_def_torch[None, None], dim=-1)  # F, T
 
             # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
             # assert np.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
@@ -515,8 +521,6 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         nonlocal epa_df
 
         ppc_off, ppc_def, ppc_ind = get_ppc()  # (F, T), (F, T), (F, T, J)
-        catch_prob_off = np.max((ppc_ind[:, :, player_teams == 'OFF'])**params.catch_beta,
-                                axis=-1)  # F, T #doesnt handle 2 off players at ball correctly
 
         # value model
         epa_xyac_df = get_xyac().merge(epa_df, how='left', on='play_endpoint_x')
@@ -535,18 +539,19 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
 
         # output metrics (eppa1 uses ppc_off as catch prob, eppa2 uses catch_prob)
         ind_eppa1_wo_value = ppc_ind * trans[..., None]  # F, T, J
-        ind_eppa1 = np.where(player_teams == 'OFF', ppc_ind * trans[..., None]
-                             * xepa_diff[..., None], ppc_ind * trans[..., None] * xepa_diff)  # F, T, J
+        ind_eppa1 = ind_eppa1_wo_value * xepa_diff[..., None]  # F, T, J
+        # ind_eppa2_wo_value = catch_prob_ind * trans[..., None]  # F, T, J
+        # ind_eppa2 = ind_eppa2_wo_value * xepa_diff[..., None]  # F, T, J
         eppa1_pass_val = (ppc_off*xepa_comp)+(1-ppc_off)*xepa_inc
         eppa1 = eppa1_pass_val*trans  # F, T
-        eppa2_pass_val = (catch_prob*xepa_comp)+(1-catch_prob)*xepa_inc
-        eppa2 = eppa2_pass_val*trans  # F, T
+        # eppa2_pass_val = (catch_prob_off*xepa_comp)+(1-catch_prob_off)*xepa_inc
+        # eppa2 = eppa2_pass_val*trans  # F, T
 
         eppa1_wo_value = ppc_off*trans
-        eppa2_wo_value = catch_prob*trans
+        # eppa2_wo_value = catch_prob_off*trans
 
-        maxEppa1Val = eppa1_pass_val[np.unravel_index(np.argmax(eppa1, axis=None), eppa1.shape)]
-        maxEppa2Val = eppa2_pass_val[np.unravel_index(np.argmax(eppa2, axis=None), eppa2.shape)]
+        # maxEppa1Val = eppa1_pass_val[np.unravel_index(np.argmax(eppa1, axis=None), eppa1.shape)]
+        # maxEppa2Val = eppa2_pass_val[np.unravel_index(np.argmax(eppa2, axis=None), eppa2.shape)]
 
         field_df = pd.DataFrame()
         player_stats_df = pd.DataFrame()
@@ -584,7 +589,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
             proj_df['proj_v_y'] = v_y_proj[true_f_idx, true_T_idx]  # J
 
             proj_df['ppc_ind'] = ppc_ind[true_f_idx, true_T_idx]
-            proj_df['catch_prob'] = ppc_ind[true_f_idx, true_T_idx]**params.catch_beta  # only valid for off players
+            # proj_df['catch_prob'] = catch_prob_ind[true_f_idx, true_T_idx]  # only valid for off players
 
             proj_df['frameId'] = frame_id
 
@@ -597,12 +602,14 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
             # np.savez_compressed(f'{dir}/{frame_id}', ind_info=ind_info, eppa_ind=eppa_ppc_ind)
 
         if stats_df:
-            ind_eppa1 = ind_eppa1.sum(axis=(0, 1))  # J
-            ind_eppa1_wo_value = ind_eppa1_wo_value.sum(axis=(0, 1))  # J
+            # ind_eppa1 = ind_eppa1.sum(axis=(0, 1))  # J
+            # ind_eppa1_wo_value = ind_eppa1_wo_value.sum(axis=(0, 1))  # J
             player_stats_df = pd.DataFrame(
-                {'gameId': game_id, 'playId': play_id, 'frameId': frame_id, 'frame_after_snap': t, 'nflId': player_ids,
-                 'displayName': player_names, 'team': player_team_names, 'team_pos': player_teams,
-                 'ind_eppa1': ind_eppa1, 'ind_eppa1_wo_value': ind_eppa1_wo_value},
+                {'gameId': game_id, 'playId': play_id, 'frameId': frame_id, 'frame_after_snap': t, 'nflId': player_ids, 'displayName': player_names,
+                 'team': player_team_names, 'team_pos': player_teams, 'ind_eppa1': ind_eppa1.sum(axis=(0, 1)),
+                 'ind_eppa1_wo_value': ind_eppa1_wo_value.sum(axis=(0, 1)), },
+                #  'ind_eppa2': ind_eppa2.sum(axis=(0, 1)),
+                #  'ind_eppa2_wo_value': ind_eppa2_wo_value.sum(axis=(0, 1))},
                 index=player_ids)
 
             off_team_name = play_df.loc[play_df.team_pos == 'OFF'].teamAbbr.iloc[0]
@@ -610,17 +617,18 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
 
             # fill out passes df
             row = {'gameId': game_id, 'playId': play_id, 'frameId': frame_id, 'frames_after_snap': t,
-                   'off_team': off_team_name, 'def_team': def_team_name, 'eppa1_tot': eppa1.sum(), 'eppa2_tot': eppa2.sum(),
-                   'maxEppa1Val': maxEppa1Val, 'maxEppa2Val': maxEppa2Val, 'xepa_inc': xepa_inc}
+                   'off_team': off_team_name, 'def_team': def_team_name, 'eppa1_tot': eppa1.sum(),  # 'eppa2_tot': eppa2.sum(),
+                   'xepa_inc': xepa_inc}
 
-            for name, arr in {'eppa1': eppa1, 'eppa2': eppa2, 'ppc_off': ppc_off, 'catch_prob': catch_prob, 'eppa1_pass_val': eppa1_pass_val,
-                              'eppa2_pass_val': eppa2_pass_val, 'eppa1_wo_value': eppa1_wo_value, 'eppa2_wo_value': eppa2_wo_value}.items():
+            # for name, arr in {'eppa1': eppa1, 'eppa2': eppa2, 'ppc_off': ppc_off, 'catch_prob': catch_prob_off, 'eppa1_pass_val': eppa1_pass_val,
+            #                   'eppa2_pass_val': eppa2_pass_val, 'eppa1_wo_value': eppa1_wo_value, 'eppa2_wo_value': eppa2_wo_value}.items():
+            for name, arr in {'eppa1': eppa1, 'ppc_off': ppc_off, 'eppa1_pass_val': eppa1_pass_val, 'eppa1_wo_value': eppa1_wo_value}.items():
                 f, T_idx = np.unravel_index(arr.argmax(), arr.shape)
                 end_x, end_y = field_locs[f]
                 row[f"max_{name}_x"] = end_x
                 row[f"max_{name}_y"] = end_y
                 row[f"max_{name}_T"] = T[T_idx]
-                row[f"max_{name}_catch_prob"] = catch_prob[f, T_idx]
+                # row[f"max_{name}_catch_prob"] = catch_prob_off[f, T_idx]
                 row[f"max_{name}_ppc_off"] = ppc_off[f, T_idx]
                 row[f"max_{name}_pint_off"] = p_int_off[f, T_idx]
                 row[f"max_{name}_ppc_def"] = ppc_def[f, T_idx]
@@ -630,33 +638,32 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 row[f"max_{name}_trans"] = trans[f, T_idx]
                 row[f"max_{name}_trans_tof"] = h_trans_prob[f, T_idx]
                 row[f"max_{name}_eppa1"] = eppa1[f, T_idx]
-                row[f"max_{name}_eppa2"] = eppa2[f, T_idx]
+                # row[f"max_{name}_eppa2"] = eppa2[f, T_idx]
                 row[f"max_{name}_eppa1_xval"] = eppa1_pass_val[f, T_idx]
-                row[f"max_{name}_eppa2_xval"] = eppa2_pass_val[f, T_idx]
+                # row[f"max_{name}_eppa2_xval"] = eppa2_pass_val[f, T_idx]
                 row[f"max_{name}_eppa1_wo_value"] = eppa1_wo_value[f, T_idx]
-                row[f"max_{name}_eppa2_wo_value"] = eppa2_wo_value[f, T_idx]
+                # row[f"max_{name}_eppa2_wo_value"] = eppa2_wo_value[f, T_idx]
 
-            if frame_id == pass_forward_frame and true_pass_found:
+            if (true_pass_found and frame_id == pass_forward_frame) or (simulatePass and frame_id == sim_frame):
                 row[f"true_x"] = true_x_idxd
                 row[f"true_y"] = true_y_idxd
                 row[f"true_T"] = true_T_idxd
-                row[f"true_catch_prob"] = catch_prob[true_f_idx, true_T_idx]
+                # row[f"true_catch_prob"] = catch_prob_off[true_f_idx, true_T_idx]
                 row[f"true_ppc_off"] = ppc_off[true_f_idx, true_T_idx]
                 row[f"true_pint_off"] = p_int_off[true_f_idx, true_T_idx]
                 row[f"true_ppc_def"] = ppc_def[true_f_idx, true_T_idx]
                 row[f"true_pint_def"] = p_int_def[true_f_idx, true_T_idx]
                 row[f"true_xyac"] = xyac[true_f_idx, true_T_idx]
-                row[f"true_xepa1"] = ppc_off[true_f_idx, true_T_idx]*xepa_comp[true_f_idx, true_T_idx]+(1-ppc_off[true_f_idx, true_T_idx])*xepa_inc
-                row[f"true_xepa2"] = catch_prob[true_f_idx, true_T_idx]*xepa_comp[true_f_idx,
-                                                                                  true_T_idx]+(1-catch_prob[true_f_idx, true_T_idx])*xepa_inc
+                row[f"true_xepa_comp"] = xepa_comp[true_f_idx, true_T_idx]
+                row[f"true_xepa"] = xepa_comp[true_f_idx, true_T_idx] if true_pass_completed else xepa_inc
                 row[f"true_trans_ppc"] = trans[true_f_idx, true_T_idx]
                 row[f"true_trans_tof"] = h_trans_prob[true_f_idx, true_T_idx]
                 row[f"true_eppa1"] = eppa1[true_f_idx, true_T_idx]
-                row[f"true_eppa2"] = eppa2[true_f_idx, true_T_idx]
+                # row[f"true_eppa2"] = eppa2[true_f_idx, true_T_idx]
                 row[f"true_eppa1_xval"] = eppa1_pass_val[true_f_idx, true_T_idx]
-                row[f"true_eppa2_xval"] = eppa2_pass_val[true_f_idx, true_T_idx]
+                # row[f"true_eppa2_xval"] = eppa2_pass_val[true_f_idx, true_T_idx]
                 row[f"true_eppa1_wo_value"] = eppa1_wo_value[true_f_idx, true_T_idx]
-                row[f"true_eppa2_wo_value"] = eppa2_wo_value[true_f_idx, true_T_idx]
+                # row[f"true_eppa2_wo_value"] = eppa2_wo_value[true_f_idx, true_T_idx]
 
             passes_df = pd.DataFrame(row, index=[t])
 
@@ -666,16 +673,16 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 'ball_end_x': field_locs[:, 0],
                 'ball_end_y': field_locs[:, 1],
                 'eppa1': eppa1.max(axis=1),
-                'eppa2': eppa2.max(axis=1),
-                'p_int_off_only': p_int_off_only.max(axis=1),
+                # 'eppa2': eppa2.max(axis=1),
+                # 'p_int_off_only': p_int_off_only.max(axis=1),
                 'p_int_off': p_int_off.max(axis=1),
                 # 'p_int_adj_off': np.max(p_int_adj, axis=(1, 2), where=(player_teams=='OFF')),
                 'ppc_off': ppc_off.max(axis=1),
                 'ppc_def': ppc_def.max(axis=1),
                 'eppa1_wo_value': eppa1_wo_value.max(axis=1),
-                'eppa2_wo_value': eppa2_wo_value.max(axis=1),
+                # 'eppa2_wo_value': eppa2_wo_value.max(axis=1),
                 'eppa1_wo_trans': eppa1_pass_val.max(axis=1),
-                'eppa2_wo_trans': eppa2_pass_val.max(axis=1),
+                # 'eppa2_wo_trans': eppa2_pass_val.max(axis=1),
                 'xyac': xyac.max(axis=1),
                 'xepa_comp': xepa_comp.max(axis=1),
                 'xepa_inc': xepa_inc,
@@ -691,13 +698,22 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
     if pass_forward_frame < (min_t_frame+ball_snap_frame):
         return play_df, field_dfs, passes_df, player_stats_df
 
-    for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
-        # for fid in tqdm(range(pass_forward_frame-5, pass_forward_frame+1)):
-        field_df, passes, player_stats, projs = frame_eppa(fid)
-        field_dfs = field_dfs.append(field_df, ignore_index=True)
-        passes_df = passes_df.append(passes, ignore_index=True)
-        player_stats_df = player_stats_df.append(player_stats, ignore_index=True)
-        proj_df = proj_df.append(projs, ignore_index=True)
+    if not simulatePass:
+        for fid in tqdm(range(min_t_frame+ball_snap_frame, min(pass_forward_frame, max_t_frame+ball_snap_frame)+1)):
+            # for fid in tqdm(range(pass_forward_frame, pass_forward_frame+1)):
+            field_df, passes, player_stats, projs = frame_eppa(fid)
+            field_dfs = field_dfs.append(field_df, ignore_index=True)
+            passes_df = passes_df.append(passes, ignore_index=True)
+            player_stats_df = player_stats_df.append(player_stats, ignore_index=True)
+            proj_df = proj_df.append(projs, ignore_index=True)
+    else:
+        for fid in tqdm(range(sim_frame, sim_frame+1)):
+            # for fid in tqdm(range(pass_forward_frame, pass_forward_frame+1)):
+            field_df, passes, player_stats, projs = frame_eppa(fid)
+            field_dfs = field_dfs.append(field_df, ignore_index=True)
+            passes_df = passes_df.append(passes, ignore_index=True)
+            player_stats_df = player_stats_df.append(player_stats, ignore_index=True)
+            proj_df = proj_df.append(projs, ignore_index=True)
 
     if true_pass_found & viz_true_proj:
         play_df = pd.merge(play_df, proj_df, on=['frameId', 'nflId'], how='left')
