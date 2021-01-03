@@ -580,22 +580,22 @@ class CompProbModel(torch.nn.Module):
             else:
                 # calculate probability that at least 1 off player gets in position to make play conditioned on p_int_def
                 #p_int_comp = 1 - torch.prod(1 - p_int_adj, dim=-1)
-
                 # select actual tof pass
-                p_int_0 = torch.gather(p_int_adj, 2, tof).squeeze() # F, J
+                p_int_tof = torch.gather(p_int_adj, 2, tof).squeeze() # F, J
+                p_int_def_gathered = torch.gather(p_int_def, 2, tof[:, :, :, 0]).squeeze()
 
                 # select closest_player_inds
                 tmp = frame[:, :, -4]
                 idx = torch.arange(tmp.shape[1], 0, -1).to(self.device)
                 player_mask = torch.argmax(tmp * idx, 1, keepdim=True)
-                p_int_1 = torch.gather(p_int_0, 2, player_mask.unsqueeze(1).repeat(1, p_int.size(1), 1)).squeeze()
+                p_int_closest = torch.gather(p_int_tof, 2, player_mask.unsqueeze(1).repeat(1, p_int.size(1), 1)).squeeze()
 
                 # gather index for closest player  (add small constant for convergence)
-
-                p_int_2 = torch.gather(p_int_1, 1, ball_field_ind[:, :, 0]).squeeze() + 0.001
+                p_int_final = torch.gather(p_int_closest, 1, ball_field_ind[:, :, 0]).squeeze() + 0.001
+                p_int_def_final = torch.gather(p_int_def_tof, 1, ball_field_ind[:, :, 0]).squeeze() + 0.001
 
                 # return p_int for each player at their expected position
-                return p_int_2 ** self.tti_lambda_off
+                return (torch.pow(p_int_final, self.tti_lambda_off) * (1 - torch.pow(p_int_def_final, self.tti_lambda_def)))
 
 if __name__ == '__main__':
     # args
@@ -652,15 +652,16 @@ if __name__ == '__main__':
     if TUNING is not None and TUNING == TuningParam.av:
         loss_fn = torch.nn.MSELoss()
     else:
-        weight = torch.tensor([0.67, 0.33])
-        loss_fn = torch.nn.BCELoss(reduction='none')
+        #weight = torch.tensor([0.67, 0.33])
+        #loss_fn = torch.nn.BCELoss(reduction='none')
+        loss_fn = torch.nn.BCELoss(reduction='sum')
 
     # check if we want cuda
     if torch.cuda.is_available():
         model = model.cuda()
         model.cuda = True
         loss_fn = loss_fn.cuda()
-        weight = weight.cuda()
+        #weight = weight.cuda()
         device = 'cuda'
     else:
         device = 'cpu'
@@ -693,8 +694,9 @@ if __name__ == '__main__':
 
             output = model(data)
             loss = loss_fn(torch.minimum(torch.ones(1).to(device), output), target.float())
-            weight_ = weight[target.data.view(-1).long()].view_as(target)
-            weighted_loss = torch.sum(loss * weight_)
+            #weight_ = weight[target.data.view(-1).long()].view_as(target)
+            #weighted_loss = torch.sum(loss * weight_)
+            weighted_loss = loss
             total_loss = total_loss + weighted_loss.detach().cpu().item() / target.size(0)
 
             if training:
