@@ -1,5 +1,5 @@
-import treelite
-import treelite_runtime
+#import treelite
+#import treelite_runtime
 import joblib
 import xgboost as xgb
 from tqdm import tqdm
@@ -108,13 +108,15 @@ t_min, t_max = 10, 63
 
 # epa/xyac model loading
 bst = joblib.load("models/in/xyac_model.model")
+bst.set_param({'predictor': 'gpu_predictor'})
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
-xyac_predictor = treelite_runtime.Predictor('models/in/xyacmymodel.so')
+xyac_predictor = bst  # treelite_runtime.Predictor('models/in/xyacmymodel.so')
 epa_model = joblib.load("models/in/epa_model_rishav_no_time.model")
+epa_model.set_param({'predictor': 'gpu_predictor'})
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
-epa_predictor = treelite_runtime.Predictor('models/in/epa_no_time_mymodel.so')
+epa_predictor = epa_model  # treelite_runtime.Predictor('models/in/epa_no_time_mymodel.so')
 
 
 def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
@@ -305,7 +307,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         int_dT = T[None, :, None] - t_tot[:, None, :]  # F, T, J
         p_int = (1/(1. + np.exp(-np.pi/np.sqrt(3.0)/params.tti_sigma * int_dT, dtype=dt)))  # F, T, J
         p_int_adj = p_int.copy()
-        p_int_def = torch.pow(1-np.prod((1-p_int_adj[:, :, player_def]), axis=-1), params.def_beta)  # F, T,
+        p_int_def = np.power(1-np.prod((1-p_int_adj[:, :, player_def]), axis=-1), params.def_beta)  # F, T,
         p_int_adj[:, :, player_off] = p_int_adj[:, :, player_off]*(1-p_int_def[..., None])  # F, T, J
         p_int_off = 1-np.prod((1-p_int_adj[:, :, player_off]), axis=-1)  # F, T
         p_int_adj_torch = torchify(p_int_adj)

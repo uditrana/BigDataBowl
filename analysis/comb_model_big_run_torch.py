@@ -32,7 +32,7 @@ for week in range(WEEK_START, WEEK_END):
                 print(f'EXISTS: {gid}, {pid}')
             else:
                 try:
-                    play_eppa_gpu(track_df, gid, pid, viz_df=False, save_np=False, stats_df=True,
+                	play_eppa_gpu(track_df, gid, pid, viz_df=False, save_np=False, stats_df=True,
                                   viz_true_proj=True, save_all_dfs=True, out_dir_path=out_dir_path)
                 except Exception as e:
                     fails.append((gid, pid))
