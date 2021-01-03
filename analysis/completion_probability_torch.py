@@ -27,7 +27,7 @@ class PlaysDataset(torch.utils.data.Dataset):
 
         if all_weeks:
             all_data = []
-            for week in range(5, 15):
+            for week in range(5, 10):
                 all_data.append(pd.read_csv(os.path.join(data_dir, 'week%d_norm.csv' % week)))
 
             tracking_df = pd.concat(all_data)
@@ -271,22 +271,23 @@ class CompProbModel(torch.nn.Module):
         self.device = 'cuda' if use_cuda else 'cpu'
 
         # define parameters and whether or not to optimize
-        self.tti_sigma = Parameter(torch.tensor([tti_sigma]),
-                requires_grad=(self.tuning == TuningParam.lamb or self.tuning == TuningParam.sigma)).float()
+        #self.tti_sigma = Parameter(torch.tensor([tti_sigma]),
+        #        requires_grad=(self.tuning == TuningParam.lamb or self.tuning == TuningParam.sigma)).float()
+        self.tti_sigma = Parameter(torch.tensor([tti_sigma]), requires_grad=False).float()
         #self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=(self.tuning == TuningParam.lamb)).float()
         self.tti_epsilon = Parameter(torch.tensor([tti_epsilon]), requires_grad=False).float()
-        self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
-                requires_grad=(self.tuning == TuningParam.lamb)).float()
         #self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
-        #        requires_grad=False).float()
+        #        requires_grad=(self.tuning == TuningParam.lamb)).float()
+        self.tti_lambda_off = Parameter(torch.tensor([tti_lambda_off]),
+                requires_grad=False).float()
         self.tti_lambda_def = Parameter(torch.tensor([tti_lambda_def]),
                 requires_grad=(self.tuning == TuningParam.lamb)).float()
         self.ppc_alpha = Parameter(torch.tensor([ppc_alpha]),
                 requires_grad=(self.tuning == TuningParam.alpha)).float()
-        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
-        self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
-        #self.a_max = Parameter(torch.tensor([a_max]), requires_grad=False).float()
-        #self.s_max = Parameter(torch.tensor([s_max]), requires_grad=False).float()
+        #self.a_max = Parameter(torch.tensor([a_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
+        #self.s_max = Parameter(torch.tensor([s_max]), requires_grad=(self.tuning == TuningParam.lamb)).float()
+        self.a_max = Parameter(torch.tensor([a_max]), requires_grad=False).float()
+        self.s_max = Parameter(torch.tensor([s_max]), requires_grad=False).float()
         self.reax_t = Parameter(torch.tensor([reax_t]), requires_grad=False).float()
         self.avg_ball_speed = Parameter(torch.tensor([avg_ball_speed]), requires_grad=False).float()
         self.g = Parameter(torch.tensor([10.72468]), requires_grad=False) #y/s/s
@@ -307,9 +308,8 @@ class CompProbModel(torch.nn.Module):
         self.hist_x_min, self.hist_x_max = -9, 70
         self.hist_y_min, self.hist_y_max = -39, 40
         self.hist_t_min, self.hist_t_max = 10, 63
-        self.T_given_Ls = Parameter(torch.from_numpy(
-            pd.read_csv('in/T_given_L.csv')['p'].values.reshape(61, len(self.T))
-        ).float(), requires_grad=False)  # (61, T); 61 diff pass distances
+        self.T_given_Ls = Parameter(torch.from_numpy(pd.read_csv('in/T_given_L.csv')['p'].values.reshape(61,
+            len(self.T))).float(), requires_grad=False)  # (61, T); 61 diff pass distances
 
     def get_hist_trans_prob(self, frame):
         B = len(frame)
@@ -452,10 +452,11 @@ class CompProbModel(torch.nn.Module):
         p_int_def = 1 - torch.prod(1 - p_int_adj * (1 - player_mask), dim=-1)
 
         if self.use_ppc:
-            # mutiply offensive probabilities by 1-p_int_def and make all def player probabilities 0
+            # mutiply offensive probabilities by 1-p_int_def
             p_int_adj[:, :, :, (player_teams.flatten() == 1)] = p_int_adj[:, :, :, (player_teams.flatten() == 1)] * \
-                    (1 - p_int_def.unsqueeze(-1))
+                    (1 - torch.pow(p_int_def.unsqueeze(-1), self.tti_lambda_def))
         else:
+            # mutiply offensive probabilities by 1-p_int_def and make all def player probabilities 0
             p_int_adj = p_int_adj * (1 - p_int_def.unsqueeze(-1)) * player_teams.view(player_teams.size(0), 1, 1, -1)
 
         if self.tuning is None:
@@ -488,7 +489,7 @@ class CompProbModel(torch.nn.Module):
             p_int_1 = torch.gather(p_int_0, 2, player_mask.unsqueeze(1).repeat(1, p_int.size(1), 1)).squeeze(2)
 
             # gather index for closest player
-            p_int_2 = torch.gather(p_int_1, 1, ball_field_ind[:, :, 0]).squeeze(1)
+            p_int_2 = torch.gather(p_int_1, 1, ball_field_ind[:, :, 0]).squeeze(1) + 0.001
 
             # return p_int for each player at their expected position
             return torch.pow(p_int_2, self.tti_lambda_off)
@@ -575,14 +576,14 @@ class CompProbModel(torch.nn.Module):
                 player_mask = torch.argmax(tmp * idx, 1, keepdim=True)
                 ppc_ind_throw = torch.gather(ppc_ind_throw, 1, player_mask).squeeze(1)
 
-                return ppc_ind_throw ** self.tti_lambda_off
+                return ppc_ind_throw
 
             else:
                 # calculate probability that at least 1 off player gets in position to make play conditioned on p_int_def
                 #p_int_comp = 1 - torch.prod(1 - p_int_adj, dim=-1)
                 # select actual tof pass
-                p_int_tof = torch.gather(p_int_adj, 2, tof).squeeze() # F, J
-                p_int_def_gathered = torch.gather(p_int_def, 2, tof[:, :, :, 0]).squeeze()
+                p_int_tof = torch.gather(p_int, 2, tof).squeeze() # F, J
+                p_int_def_tof = torch.gather(p_int_def, 2, tof[:, :, :, 0]).squeeze()
 
                 # select closest_player_inds
                 tmp = frame[:, :, -4]
@@ -595,7 +596,7 @@ class CompProbModel(torch.nn.Module):
                 p_int_def_final = torch.gather(p_int_def_tof, 1, ball_field_ind[:, :, 0]).squeeze() + 0.001
 
                 # return p_int for each player at their expected position
-                return (torch.pow(p_int_final, self.tti_lambda_off) * (1 - torch.pow(p_int_def_final, self.tti_lambda_def)))
+                return torch.pow(p_int_final, self.tti_lambda_off) * (1 - torch.pow(p_int_def_final, self.tti_lambda_def)) + 0.001
 
 if __name__ == '__main__':
     # args
@@ -643,8 +644,8 @@ if __name__ == '__main__':
     results_df = pd.DataFrame(data=ds.play_list[:, :2], index=np.arange(ds.play_list.shape[0]),
             columns=['gameId', 'playId'])
 
-    model = CompProbModel(tti_sigma=0.31, a_max=7.67, s_max=9.42, tti_lambda_off=0.25,
-            tti_epsilon=0.0, reax_t=0.0, ppc_alpha=1.2, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
+    model = CompProbModel(tti_sigma=0.31, a_max=7.67, s_max=9.42, tti_lambda_off=1.0, tti_lambda_def=1.0,
+            tti_epsilon=0.0001, reax_t=0.0001, ppc_alpha=1.2, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
 
     if args.continue_training is not None:
         model.load_state_dict(torch.load(args.continue_training))
@@ -652,16 +653,16 @@ if __name__ == '__main__':
     if TUNING is not None and TUNING == TuningParam.av:
         loss_fn = torch.nn.MSELoss()
     else:
-        #weight = torch.tensor([0.67, 0.33])
-        #loss_fn = torch.nn.BCELoss(reduction='none')
-        loss_fn = torch.nn.BCELoss(reduction='sum')
+        weight = torch.tensor([1.33, 0.67])
+        loss_fn = torch.nn.BCEWithLogitsLoss(reduction='none')
+        #loss_fn = torch.nn.BCEWithLogitsLoss(reduction='sum')
 
     # check if we want cuda
     if torch.cuda.is_available():
         model = model.cuda()
         model.cuda = True
         loss_fn = loss_fn.cuda()
-        #weight = weight.cuda()
+        weight = weight.cuda()
         device = 'cuda'
     else:
         device = 'cpu'
@@ -694,9 +695,8 @@ if __name__ == '__main__':
 
             output = model(data)
             loss = loss_fn(torch.minimum(torch.ones(1).to(device), output), target.float())
-            #weight_ = weight[target.data.view(-1).long()].view_as(target)
-            #weighted_loss = torch.sum(loss * weight_)
-            weighted_loss = loss
+            weight_ = weight[target.data.view(-1).long()].view_as(target)
+            weighted_loss = torch.sum(loss * weight_)
             total_loss = total_loss + weighted_loss.detach().cpu().item() / target.size(0)
 
             if training:
@@ -719,11 +719,11 @@ if __name__ == '__main__':
 
             results_df.to_csv('calibration_results.csv')
 
-    #print('a_max', model.a_max)
-    #print('s_max', model.s_max)
+    print('a_max', model.a_max)
+    print('s_max', model.s_max)
     #print('reax_t', model.reax_t)
-    #print('sigma', model.tti_sigma)
+    print('sigma', model.tti_sigma)
     #print('epsilon', model.tti_epsilon)
-    #print('lambda', model.tti_lambda_off)
-    ##print(model.tti_lambda_def)
+    print('lambda_off', model.tti_lambda_off)
+    print('lambda_def', model.tti_lambda_def)
     #print('alpha', model.ppc_alpha)
