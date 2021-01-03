@@ -50,7 +50,7 @@ params.tti_sigma = 0.31
 params.alpha = 1.2
 params.z_min = 1
 params.z_max = 3
-params.catch_beta = 0.25
+params.def_beta = 0.25
 
 # file loading and prep
 path_shared = '../data/{}'
@@ -117,18 +117,26 @@ cols_when_model_builds_ep = epa_model.feature_names
 epa_predictor = treelite_runtime.Predictor('models/in/epa_no_time_mymodel.so')
 
 
+def checkPlayIsNormal(play_df):
+    events = set(play_df.event.unique())
+    if 'pass_forward' not in events:
+        raise ValueError('No Pass Forward in play')
+    if 'fumble' in events:
+        raise ValueError('Fumble in play')
+    return True
+
+
 def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
                   out_dir_path='../output/{}'):
     play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
-
+    checkPlayIsNormal(play_df)
     ball_snap_frame = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'ball_snap')].frameId.iloc[0]
-    pass_forward_frame = play_df.loc[(play_df.nflId == 0) & ((play_df.event == 'pass_forward') | (play_df.event == 'pass_shovel') | (
-        play_df.event == 'qb_sack') | (play_df.event == 'qb_strip_sack') | (play_df.event == 'tackle'))].frameId.sort_values().iloc[0]
+    pass_forward_frame = play_df.loc[(play_df.nflId == 0) & ((play_df.event == 'pass_forward') |
+                                                             (play_df.event == 'pass_shovel'))].frameId.sort_values().iloc[0]
     play_df['frames_since_snap'] = play_df.frameId - ball_snap_frame
 
     pass_arriveds = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'pass_arrived'), 'frameId'].to_list()
     true_pass_found = len(pass_arriveds) > 0
-
     if true_pass_found:
         pass_arrived_frame = pass_arriveds[0]
         true_T_frames = pass_arrived_frame - pass_forward_frame
@@ -507,8 +515,8 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         nonlocal epa_df
 
         ppc_off, ppc_def, ppc_ind = get_ppc()  # (F, T), (F, T), (F, T, J)
-        catch_prob = np.max((ppc_ind[:, :, player_teams == 'OFF'])**params.catch_beta,
-                            axis=-1)  # F, T #doesnt handle 2 off players at ball correctly
+        catch_prob_off = np.max((ppc_ind[:, :, player_teams == 'OFF'])**params.catch_beta,
+                                axis=-1)  # F, T #doesnt handle 2 off players at ball correctly
 
         # value model
         epa_xyac_df = get_xyac().merge(epa_df, how='left', on='play_endpoint_x')
@@ -516,6 +524,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         # end_x = epa_xyac_df.play_endpoint_x.to_numpy().reshape(ppc_off.shape)
         xepa_comp = epa_xyac_df.xepa_comp.to_numpy().reshape(ppc_off.shape)  # F, T
         xepa_inc = epa_xyac_df.xepa_inc.iloc[0]
+        xepa_diff = xepa_comp-xepa_inc
         # assert(h_trans_prob.shape == ppc_off.shape)
         # breakpoint()
 
@@ -527,7 +536,7 @@ def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         # output metrics (eppa1 uses ppc_off as catch prob, eppa2 uses catch_prob)
         ind_eppa1_wo_value = ppc_ind * trans[..., None]  # F, T, J
         ind_eppa1 = np.where(player_teams == 'OFF', ppc_ind * trans[..., None]
-                             * xepa_comp[..., None], ppc_ind * trans[..., None] * xepa_inc)  # F, T, J
+                             * xepa_diff[..., None], ppc_ind * trans[..., None] * xepa_diff)  # F, T, J
         eppa1_pass_val = (ppc_off*xepa_comp)+(1-ppc_off)*xepa_inc
         eppa1 = eppa1_pass_val*trans  # F, T
         eppa2_pass_val = (catch_prob*xepa_comp)+(1-catch_prob)*xepa_inc
