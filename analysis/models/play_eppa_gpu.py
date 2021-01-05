@@ -15,7 +15,7 @@ from utils import get_repo_dir
 
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
-# bst = joblib.load("models/in/xyac_model.model")
+# bst = joblib.load(join(get_repo_dir(), "analysis/models/in/xyac_model.model"))
 # xgb.plot_importance(bst)
 # scores = bst.get_score(importance_type='gain')
 # print(scores.keys())
@@ -25,11 +25,11 @@ from utils import get_repo_dir
 
 # model = treelite.Model.from_xgboost(bst)
 # toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='models/in/xyacmymodel.so',
+# model.export_lib(toolchain=toolchain, libpath=join(get_repo_dir(), 'analysis/models/in/xyacmymodel.so'),
 
 #                  params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
 
-# bst = joblib.load("models/in/epa_model_rishav_no_time.model")
+# bst = joblib.load(join(get_repo_dir(), "analysis/models/in/epa_model_rishav_no_time.model"))
 # xgb.plot_importance(bst)
 # scores = bst.get_score(importance_type='gain')
 # print(scores.keys())
@@ -39,7 +39,7 @@ from utils import get_repo_dir
 
 # model = treelite.Model.from_xgboost(bst)
 # toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='models/in/epa_no_time_mymodel.so',
+# model.export_lib(toolchain=toolchain, libpath=join(get_repo_dir(), 'analysis/models/in/epa_no_time_mymodel.so'),
 #                  params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
 
 
@@ -85,20 +85,20 @@ yy_torch = torchify(yy)
 field_locs_torch = torchify(field_locs)
 
 # historical trans model inputs/params
-L_given_ts = np.load('models/in/L_given_t.npy')
-T_given_Ls = pd.read_csv('models/in/T_given_L.csv')['p'].values.reshape(60, len(T))  # (61, T)
+L_given_ts = np.load(join(get_repo_dir(), 'analysis/models/in/L_given_t.npy'))
+T_given_Ls = pd.read_csv(join(get_repo_dir(), 'analysis/models/in/T_given_L.csv'))['p'].values.reshape(60, len(T))  # (61, T)
 # from L_given_t in historical notebook
 x_min, x_max = -9, 70
 y_min, y_max = -39, 40
 t_min, t_max = 10, 63
 
 # epa/xyac model loading
-bst = joblib.load("models/in/xyac_model.model")
+bst = joblib.load(join(get_repo_dir(), "analysis/models/in/xyac_model.model"))
 bst.set_param({'predictor': 'gpu_predictor'})
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
 xyac_predictor = bst  # treelite_runtime.Predictor('models/in/xyacmymodel.so')
-epa_model = joblib.load("models/in/epa_model_rishav_no_time.model")
+epa_model = joblib.load(join(get_repo_dir(), "analysis/models/in/epa_model_rishav_no_time.model"))
 epa_model.set_param({'predictor': 'gpu_predictor'})
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
@@ -106,7 +106,7 @@ epa_predictor = epa_model  # treelite_runtime.Predictor('models/in/epa_no_time_m
 
 
 def play_eppa_gpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
-                  out_dir_path='../output/{}', simulatePass=None):
+                  out_dir_path=join(get_repo_dir(), 'output/{}'), simulatePass=None):
     play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
 
     events = set(play_df.event.unique())

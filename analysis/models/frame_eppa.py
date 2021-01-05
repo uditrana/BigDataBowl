@@ -50,20 +50,20 @@ pbp_joined["down4"] = np.where((pbp_joined['down_x'] == 4), 1, 0)
 pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team']), 1, 0)
 
 # historical trans model inputs/params
-L_given_ts = np.load('models/in/L_given_t.npy')
-T_given_Ls = pd.read_csv('models/in/T_given_L.csv')['p'].values.reshape(60, len(T))  # (61, T)
+L_given_ts = np.load(join(get_repo_dir(), 'analysis/models/in/L_given_t.npy'))
+T_given_Ls = pd.read_csv(join(get_repo_dir(), 'analysis/models/in/T_given_L.csv'))['p'].values.reshape(60, len(T))  # (61, T)
 # from L_given_t in historical notebook
 x_min, x_max = -9, 70
 y_min, y_max = -39, 40
 t_min, t_max = 10, 63
 
 # epa/xyac model loading
-bst = joblib.load("models/in/xyac_model.model")
+bst = joblib.load(join(get_repo_dir(), "analysis/models/in/xyac_model.model"))
 bst.set_param({'predictor': 'gpu_predictor'})
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
 xyac_predictor = bst  # treelite_runtime.Predictor('models/in/xyacmymodel.dylib')
-epa_model = joblib.load("models/in/epa_model_rishav_no_time.model")
+epa_model = joblib.load(join(get_repo_dir(), "analysis/models/in/epa_model_rishav_no_time.model"))
 epa_model.set_param({'predictor': 'gpu_predictor'})
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
