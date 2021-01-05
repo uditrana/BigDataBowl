@@ -43,7 +43,6 @@ class PlaysDataset(torch.utils.data.Dataset):
 
         # generate unique id from game, play, frame ids
         tracking_df['uniqueId'] = tracking_df[['gameId', 'playId', 'frameId']].apply(lambda row: '_'.join(row.values.astype(str)), axis=1)
-        epa_df['uniqueId'] = epa_df[['gameId', 'playId', 'frameId']].apply(lambda row: '_'.join(row.values.astype(str)), axis=1)
 
         print('generated unique id', time.time() - start_time)
 
@@ -87,9 +86,11 @@ class PlaysDataset(torch.utils.data.Dataset):
         tracking_df = tracking_df.loc[(tracking_df.position != 'QB') & (tracking_df.nflId != 0)].merge(ball_start_end, on=['gameId', 'playId'])
         print('merged with ball', time.time() - start_time)
 
-        # clean epa_df and join with tracking_df
-        epa_df = epa_df[['uniqueId', 'xepa_inc', 'true_xepa_comp']].drop_duplicates().rename(columns={'true_xepa_comp': 'xepa_comp'})
-        tracking_df = tracking_df.merge(epa_df, how='left', on='uniqueId')
+        # clean epa_df (keep 1 per play, drop na) and join with tracking_df
+        epa_df = epa_df[['gameId', 'playId', 'xepa_inc', 'true_xepa_comp', 'true_xepa']].drop_duplicates().rename(columns={'true_xepa_comp': 'xepa_comp'}).dropna()
+
+        tracking_df = tracking_df.merge(epa_df, how='left', on=['gameId', 'playId'])
+        tracking_df = tracking_df.loc[(tracking_df.xepa_inc.notna()) & (tracking_df.xepa_comp.notna())]
         print('merged with epa_df', time.time() - start_time)
 
         if self.tuning is None or self.tuning == TuningParam.lamb:
@@ -144,7 +145,7 @@ class PlaysDataset(torch.utils.data.Dataset):
 
         if self.tuning == TuningParam.temp:
             self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['uniqueId',
-                'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y', 'pass_outcome', 'xepa_comp', 'xepa_inc']].copy()
+                'nflId', 'team_pos', 'x', 'y', 'ball_end_x', 'ball_end_y', 'pass_outcome', 'true_xepa']].copy()
 
             # remove frames where nobody is close to ball when ball arrives
             self.player_reached['dist_to_ball'] = np.linalg.norm(np.stack([self.player_reached.x.values,
@@ -161,7 +162,7 @@ class PlaysDataset(torch.utils.data.Dataset):
             self.player_reached['control_ball'] = self.player_reached['closest_to_ball'] * \
                     (self.player_reached['pass_outcome']).astype(int)
 
-            self.player_reached = self.player_reached[['uniqueId', 'nflId', 'pass_outcome', 'xepa_comp', 'xepa_inc']]
+            self.player_reached = self.player_reached[['uniqueId', 'nflId', 'pass_outcome', 'true_xepa']]
 
             print('computed control ball', time.time() - start_time)
 
@@ -174,10 +175,12 @@ class PlaysDataset(torch.utils.data.Dataset):
         #    self.player_reached = self.player_reached.drop(columns=['pass_outcome', 'ball_end_x', 'ball_end_y', 'team_pos', 'x', 'y'])
 
         self.all_plays = tracking_df[['uniqueId', 'nflId', 'x', 'y', 'v_x', 'v_y',
-            'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'ball_end_x', 'ball_end_y']]
+            'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'ball_end_x',
+            'ball_end_y', 'xepa_comp', 'xepa_inc']]
 
         # generate play list
-        play_list = tracking_df.loc[(tracking_df.event == 'pass_forward') | (tracking_df.event == 'pass_arrived'), ['gameId', 'playId', 'event', 'first_frameId']].copy()
+        play_list = tracking_df.loc[(tracking_df.event == 'pass_forward') | (tracking_df.event == 'pass_arrived'),
+                ['gameId', 'playId', 'event', 'first_frameId']].copy()
         play_list = play_list.replace({'pass_forward': 1, 'pass_arrived': 0})
 
         # calculate forward and arrived frame ids (to get rid of event field)
@@ -280,20 +283,14 @@ class PlaysDataset(torch.utils.data.Dataset):
 
         elif self.tuning == TuningParam.temp:
             # store xepa for comp and inc passes
-            frame['xepa_comp'] = sigma_lambda_label['xepa_comp'].values
-            frame['xepa_inc'] = sigma_lambda_label['xepa_inc'].values
+            #frame['xepa_comp'] = sigma_lambda_label['xepa_comp'].values
+            #frame['xepa_inc'] = sigma_lambda_label['xepa_inc'].values
 
             data = torch.tensor(frame[['nflId', 'x', 'y', 'v_x', 'v_y',
                 'a_x', 'a_y', 'team_pos', 'ball_start_x', 'ball_start_y', 'xepa_comp',
-                'xepa_inc', 'evaluate_dist', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
+                'xepa_inc', 'ball_end_x', 'ball_end_y', 'tof']].values).float()
 
-            # calculate comb epa
-            sigma_lambda_label['comb_epa'] = sigma_lambda_label['pass_outome'] * sigma_lambda_label['xepa_comp'] + \
-                    (1 - sigma_lambda_label['pass_outcome']) * sigma_lambda_label['xpa_inc']
-
-            breakpoint()
-
-            label = torch.tensor(sigma_lambda_label[['comb_epa']].values)[0]
+            label = torch.tensor(sigma_lambda_label['true_xepa'].values)[0]
 
         if data.size(0) < self.max_num:
             data = torch.cat([data, torch.zeros([self.max_num - data.size(0), data.size(1)])], dim=0)
@@ -304,7 +301,6 @@ class PlaysDataset(torch.utils.data.Dataset):
         # TODO(adit98) investigate why this happens, for now put this in as a hack
         if data.size(0) > self.max_num:
             data = data[:self.max_num]
-            label = label[:self.max_num]
 
         return data, label
 
@@ -652,11 +648,6 @@ class CompProbModel(torch.nn.Module):
             # calculate probability that at least 1 off player gets in position to make play conditioned on p_int_def
             #p_int_comp = 1 - torch.prod(1 - p_int_adj, dim=-1)
 
-            # get closest_player_inds
-            tmp = frame[:, :, -4]
-            idx = torch.arange(tmp.shape[1], 0, -1).to(self.device)
-            player_mask = torch.argmax(tmp * idx, 1, keepdim=True)
-
             # calculate p_int_final from p_int and p_int_def
             p_int_final = p_int * (1 - p_int_def).unsqueeze(-1)
 
@@ -672,13 +663,13 @@ class CompProbModel(torch.nn.Module):
             trans_prob /= trans_prob.sum(dim=(1, 2), keepdim=True)  # (B, F, T)
 
             # calculate eppa
-            eppa_pass_val = p_int_off * frame[:, 0, -6].view(-1, 1, 1) + (1 - p_int_off) * frame[:, 0, -5].view(-1, 1, 1)
+            eppa_pass_val = p_int_off * frame[:, 0, -5].view(-1, 1, 1) + (1 - p_int_off) * frame[:, 0, -4].view(-1, 1, 1)
             eppa = eppa_pass_val * trans_prob  # B, F, T
 
-            # TODO need to check if this works
-            mean_eppa = eppa * F.softmax(eppa.view(eppa.size(0), -1) / torch.exp(self.temp),
-                    dim=1).view_as(eppa)
-            return mean_eppa
+            total_eppa = torch.sum(eppa * F.softmax(eppa.view(eppa.size(0), -1) / torch.exp(self.temp),
+                    dim=1).view_as(eppa), dim=(1,2))
+
+            return total_eppa 
 
 
 if __name__ == '__main__':
@@ -712,6 +703,8 @@ if __name__ == '__main__':
         event_filter = 'pass_forward'
     elif args.tuning == 'av':
         TUNING = TuningParam.av
+    elif args.tuning == 'temp':
+        TUNING = TuningParam.temp
     else:
         raise NotImplementedError("Tuning " + args.tuning + " is not supported.")
 
@@ -728,13 +721,14 @@ if __name__ == '__main__':
             columns=['gameId', 'playId'])
 
     model = CompProbModel(tti_sigma=0.31, a_max=7.67, s_max=9.42, tti_lambda_off=1.0, tti_lambda_def=1.0,
-            tti_epsilon=0.0001, reax_t=0.0001, ppc_alpha=1.2, temp=10, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
+            tti_epsilon=0.0001, reax_t=0.0001, ppc_alpha=1.0, temp=5.0, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
 
     if args.continue_training is not None:
         model.load_state_dict(torch.load(args.continue_training))
 
     if TUNING is not None and (TUNING == TuningParam.av or TUNING == TuningParam.temp):
-        loss_fn = torch.nn.MSELoss()
+        loss_fn = torch.nn.MSELoss(reduction='sum')
+        weight = None
     else:
         weight = torch.tensor([1.33, 0.67])
         loss_fn = torch.nn.BCEWithLogitsLoss(reduction='none')
@@ -745,7 +739,7 @@ if __name__ == '__main__':
         model = model.cuda()
         model.cuda = True
         loss_fn = loss_fn.cuda()
-        weight = weight.cuda()
+        #weight = weight.cuda()
         device = 'cuda'
     else:
         device = 'cpu'
@@ -771,6 +765,8 @@ if __name__ == '__main__':
             if torch.cuda.is_available():
                 data = data.cuda()
                 target = target.cuda()
+                if weight is not None:
+                    weight = weight.cuda()
 
             # flatten target
             if TUNING != TuningParam.av:
@@ -778,13 +774,14 @@ if __name__ == '__main__':
 
             output = model(data)
 
-            if loss_fn != torch.nn.MSELoss()
+            if weight is not None:
                 loss = loss_fn(torch.minimum(torch.ones(1).to(device), output), target.float())
                 weight_ = weight[target.data.view(-1).long()].view_as(target)
                 weighted_loss = torch.sum(loss * weight_)
                 total_loss = total_loss + weighted_loss.detach().cpu().item() / target.size(0)
             else:
                 loss = loss_fn(output, target.float())
+                total_loss = total_loss + loss.detach().cpu().item() / target.size(0)
 
             if training:
                 # step gradient
@@ -815,3 +812,4 @@ if __name__ == '__main__':
     print('lambda_off', model.tti_lambda_off)
     print('lambda_def', model.tti_lambda_def)
     #print('alpha', model.ppc_alpha)
+    print('temp', model.temp)
