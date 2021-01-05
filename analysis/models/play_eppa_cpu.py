@@ -3,7 +3,7 @@ import treelite_runtime
 import joblib
 import xgboost as xgb
 from tqdm import tqdm
-
+from consts import *
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -78,13 +78,6 @@ pbp_joined["down4"] = np.where((pbp_joined['down_x'] == 4), 1, 0)
 pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team']), 1, 0)
 
 # model constants
-T = np.linspace(0.1, 4, 40, dtype=dt)
-x = np.linspace(0.5, 119.5, 120, dtype=dt)
-y = np.linspace(-0.5, 53.5, 55, dtype=dt)
-y[0] = -0.2
-xx, yy = np.meshgrid(x, y)
-field_locs = np.stack((xx, yy)).reshape(2, -1).T  # (F, 2)
-tot_pass_cnt = len(field_locs[:, 1])*len(T)
 print(f'Considering {tot_pass_cnt} passes per frame')
 
 # historical trans model inputs/params
