@@ -163,22 +163,14 @@ def frame_eppa(play_df, frame_id):
 
     frame_df = frame_df.drop_duplicates(subset='nflId').sort_values('nflId').reset_index()
 
-    # project motion by reaction time
-    frame_df['v_x_r'] = frame_df.a_x*params.reax_t+frame_df.v_x
-    frame_df['v_y_r'] = frame_df.a_y*params.reax_t+frame_df.v_y
-    frame_df['v_r_mag'] = np.linalg.norm(np.array([frame_df.v_x_r, frame_df.v_y_r], dtype=dt), axis=0)
-    frame_df['v_r_theta'] = np.arctan2(frame_df.v_y_r, frame_df.v_x_r)
-    frame_df['x_r'] = frame_df.x + frame_df.v_x*params.reax_t + 0.5*frame_df.a_x*params.reax_t**2
-    frame_df['y_r'] = frame_df.y + frame_df.v_y*params.reax_t + 0.5*frame_df.a_y*params.reax_t**2
-
     player_teams = frame_df['team_pos'].to_numpy()  # J,
     player_off = player_teams == 'OFF'
     player_def = np.logical_not(player_off)
     player_team_names = frame_df['teamAbbr'].to_numpy()  # J,
     player_ids = frame_df['nflId'].to_numpy()
     player_names = frame_df['displayName'].to_numpy()
-    reaction_player_locs = frame_df[['x_r', 'y_r']].to_numpy(dtype=dt)  # (J, 2)
-    reaction_player_vels = frame_df[['v_x_r', 'v_y_r']].to_numpy(dtype=dt)  # (J,2)
+    reaction_player_locs = frame_df[['x_opt', 'y_opt']].to_numpy(dtype=dt)  # (J, 2)
+    reaction_player_vels = frame_df[['v_x_opt', 'v_y_opt']].to_numpy(dtype=dt)  # (J,2)
 
     player_off_torch = torchify(player_off)  # J,
     player_def_torch = torchify(player_def)  # J,
