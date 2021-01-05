@@ -10,6 +10,8 @@ from torch.nn.parameter import Parameter
 from tqdm import tqdm
 import argparse
 import time
+from utils import get_repo_dir
+
 
 class TuningParam(Enum):
     sigma = 1
@@ -478,7 +480,7 @@ class CompProbModel(torch.nn.Module):
 if __name__ == '__main__':
     # args
     parser = argparse.ArgumentParser()
-    parser.add_argument('-d', '--data_dir', default='../data', help='path to directory with data files')
+    parser.add_argument('-d', '--data_dir', default=os.path.join(get_repo_dir(), 'data'), help='path to directory with data files')
     parser.add_argument('-j', '--num_workers', default=4, help='number of data loader workers', type=int)
     parser.add_argument('-b', '--batch_size', default=4, help='batch size to use', type=int)
     parser.add_argument('-e', '--epochs', default=5, help='number of training epochs', type=int)

@@ -4,13 +4,14 @@ from pathlib import Path
 import traceback
 import os
 from tqdm import tqdm
+from utils import get_repo_dir
 
 
 WEEK_START = 1
 WEEK_END = 2
 
-out_dir_path = '../output/{}'  # for cloud runs
-path_shared = '../data/{}'
+out_dir_path = os.path.join(get_repo_dir(), 'output/{}')  # for cloud runs
+path_shared = os.path.join(get_repo_dir(), 'data/{}')
 
 # main loop
 for week in range(WEEK_START, WEEK_END):

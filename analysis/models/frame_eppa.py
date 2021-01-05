@@ -7,10 +7,11 @@ import xgboost as xgb
 from .consts import *
 from .params import params
 import joblib
-
+from os.path import join
+from utils import get_repo_dir
 
 # file loading and prep
-path_shared = '../data/{}'
+path_shared = join(get_repo_dir(), 'data/{}')
 
 dt = np.float64
 dt_torch = torch.float64

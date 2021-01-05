@@ -7,11 +7,13 @@ import torch
 from models.params import params
 from models.consts import *
 from models.frame_eppa import frame_eppa, set_device
+from utils import get_repo_dir
 from tqdm import tqdm
 
-
-out_dir_path = '../def_opt_output/{}'  # for cloud runs
-path_shared = '../data/{}'
+out_dir = os.path.join(get_repo_dir(), 'def_opt_output')
+os.makedirs(out_dir, exist_ok=True)
+out_dir_path = os.path.join(out_dir, '{}')  # for cloud runs
+path_shared = os.path.join(get_repo_dir(), 'data/{}')
 
 plan_horizon = 0.8  # how far ahead to project (in seconds) while optimizing path
 plan_res = 0.1  # how long (in seconds) to execute plan. less than plan_horizon
