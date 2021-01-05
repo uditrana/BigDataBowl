@@ -8,6 +8,11 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import torch
+from os.path import join
+from params import params
+from consts import *
+from utils import get_repo_dir
+
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
 # bst = joblib.load("models/in/xyac_model.model")
@@ -38,22 +43,11 @@ import torch
 #                  params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
 
 
-def params(): return None  # create an empty object to add params
-
-
 min_t_frame = 14
 max_t_frame = 47
-params.a_max = 7.67
-params.s_max = 9.42
-params.reax_t = 0.2
-params.tti_sigma = 0.31
-params.alpha = 1.2
-params.z_min = 1
-params.z_max = 3
-params.def_beta = 1
 
 # file loading and prep
-path_shared = '../data/{}'
+path_shared = join(get_repo_dir(), 'data/{}')
 
 dt = np.float64
 dt_torch = torch.float64
@@ -84,14 +78,6 @@ pbp_joined["down3"] = np.where((pbp_joined['down_x'] == 3), 1, 0)
 pbp_joined["down4"] = np.where((pbp_joined['down_x'] == 4), 1, 0)
 pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team']), 1, 0)
 
-# model constants
-T = np.linspace(0.1, 4, 40, dtype=dt)
-x = np.linspace(0.5, 119.5, 120, dtype=dt)
-y = np.linspace(-0.5, 53.5, 55, dtype=dt)
-y[0] = -0.2
-xx, yy = np.meshgrid(x, y)
-field_locs = np.stack((xx, yy)).reshape(2, -1).T  # (F, 2)
-tot_pass_cnt = len(field_locs[:, 1])*len(T)
 print(f'Considering {tot_pass_cnt} passes per frame')
 T_torch = torchify(T)
 xx_torch = torchify(xx)

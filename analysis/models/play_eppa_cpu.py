@@ -4,9 +4,12 @@ import joblib
 import xgboost as xgb
 from tqdm import tqdm
 from consts import *
+from params import params
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from utils import get_repo_dir
+from os.path import join
 
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
@@ -38,22 +41,8 @@ from pathlib import Path
 #                  params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
 
 
-def params(): return None  # create an empty object to add params
-
-
-min_t_frame = 14
-max_t_frame = 47
-params.a_max = 7.67
-params.s_max = 9.42
-params.reax_t = 0.2
-params.tti_sigma = 0.31
-params.alpha = 1.2
-params.z_min = 1
-params.z_max = 3
-params.def_beta = 1
-
 # file loading and prep
-path_shared = '../data/{}'
+path_shared = join(get_repo_dir(), 'data/{}')
 
 dt = np.float64
 
@@ -77,7 +66,6 @@ pbp_joined["down3"] = np.where((pbp_joined['down_x'] == 3), 1, 0)
 pbp_joined["down4"] = np.where((pbp_joined['down_x'] == 4), 1, 0)
 pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team']), 1, 0)
 
-# model constants
 print(f'Considering {tot_pass_cnt} passes per frame')
 
 # historical trans model inputs/params
