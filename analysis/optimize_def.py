@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import numpy as np
 import pandas as pd
 import torch
@@ -7,7 +8,7 @@ from models.frame_eppa import frame_eppa
 
 
 out_dir_path = '../output/{}'  # for cloud runs
-path_shared = '~/Downloads/nfl-big-data-bowl-2021/{}'
+path_shared = '../data/{}'
 
 WEEK = 1
 game_id = 2018090600
@@ -17,8 +18,8 @@ plan_res = 0.3  # how long (in seconds) to execute plan. less than plan_horizon
 frame_dt = 0.1  # how far apart (in seconds) the frames are
 plan_res_linspace = np.linspace(frame_dt, plan_res, np.round(plan_res/frame_dt).astype(int))[:,None]
 # 10*dt is the number of frames to increment by
-res_incr = 10 * plan_res
-horizon_incr = 10 * plan_horizon
+res_incr = int(10 * plan_res)
+horizon_incr = int(10 * plan_horizon)
 reduce_eppa_mode = 'sum'  # choose from {'sum', 'max', 'softmax'}
 softmax_temp = 1000  # used for 'softmax' reduce_eppa_mode
 
@@ -50,7 +51,7 @@ def optimize_def_frame(play_df, frame_id, frame_only):
             * updated_def_pos: an object like def_pos with updated positions
             * eppa: a float representing EPPA conceded on that frame
     Assumptions:
-        * Each player can sustain their instantaneous acceleration for dt time
+        * Each player can sustain their instantaneous acceleration for plan_horizon time
     """
     if frame_only:
         return np.array([reduce_eppa(frame_eppa(play_df, frame_id))])
@@ -93,8 +94,8 @@ def optimize_def_frame(play_df, frame_id, frame_only):
         def_vel = np.array([def_row.v_x_opt, def_row.v_y_opt], dtype=np.float32)
         def_vel = np.array([5, 6], dtype=np.float32)
         reach_vecs = field_locs - def_loc  # (F, 2)
-        reach_accs = 2 * (reach_vecs - def_vel*dt) / dt**2  # (F, 2); required accel to get to each spot
-        reach_vels = reach_accs * dt + def_vel  # (F, 2); resultant velocity at each spot
+        reach_accs = 2 * (reach_vecs - def_vel * plan_horizon) / plan_horizon**2  # (F, 2); required accel to get to each spot
+        reach_vels = reach_accs * plan_horizon + def_vel  # (F, 2); resultant velocity at each spot
         reach_acc_mags = np.linalg.norm(reach_accs, axis=1)  # (F,)
         reach_vel_mags = np.linalg.norm(reach_vels, axis=1)  # (F,)
         reachable_idx = (reach_acc_mags < params.a_max) & (reach_vel_mags < params.s_max)
@@ -104,12 +105,13 @@ def optimize_def_frame(play_df, frame_id, frame_only):
         frame_eppa_vals = []
         print(f'{len(reachable_locs)} reachable locations found')
         # print(reach_acc_mags.argmax())
-        breakpoint()
         for i in range(len(reachable_locs)):
+            breakpoint()
             play_df.loc[(play_df.frameId == frame_id) & (play_df.nflId == def_id),
                         ['x_opt', 'y_opt', 'v_x_opt', 'v_y_opt', 'a_x_opt', 'a_y_opt']] = \
                         reachable_locs[i, 0], reachable_locs[i, 1], reachable_vels[i, 0],\
                         reachable_vels[i, 1], reachable_accs[i, 0], reachable_accs[i, 1]
+            breakpoint()
             frame_eppa_val = reduce_eppa(frame_eppa(play_df, frame_id))
             frame_eppa_vals.append(frame_eppa_val)
         opt_idx = np.array(frame_eppa_vals).argmin()
@@ -137,15 +139,15 @@ def optimize_def(week, game_id, play_id):
     play_df['v_y_opt'] = play_df.v_y
     play_df['a_x_opt'] = play_df.a_x
     play_df['a_y_opt'] = play_df.a_y
-    ball_snap_frame = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'ball_snap')].frameId.iloc[0]
+    ball_snap_frame = play_df.loc[(play_df.nflId == 0) & (play_df.event == 'ball_snap')].frameId.iloc[0].astype(int)
     pass_forward_frame = play_df.loc[(play_df.nflId == 0) & ((play_df.event == 'pass_forward') |
-                                                             (play_df.event == 'pass_shovel'))].frameId.sort_values().iloc[0]
+                                                             (play_df.event == 'pass_shovel'))].frameId.sort_values().iloc[0].astype(int)
     # necessary for frame_eppa function
     play_df['frames_since_snap'] = play_df.frameId - ball_snap_frame
     # TODO force add in pass_forward_frame
     frame_ids = list(np.arange(ball_snap_frame+horizon_incr, pass_forward_frame+horizon_incr-res_incr+1, res_incr))
     eppas = np.concatenate([optimize_def_frame(play_df, ball_snap_frame, frame_only=True)]\
-                + [optimize_def_frame(play_df, frame_id, frame_only=False)
+                + [optimize_def_frame(play_df, int(frame_id), frame_only=False)
                     for frame_id in frame_ids])
     return play_df, eppas
 

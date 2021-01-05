@@ -10,7 +10,7 @@ import joblib
 
 
 # file loading and prep
-path_shared = '~/Downloads/nfl-big-data-bowl-2021/{}'
+path_shared = '../data/{}'
 
 dt = np.float64
 dt_torch = torch.float64
