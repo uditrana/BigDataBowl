@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
+import os
 import numpy as np
 import pandas as pd
+pd.options.mode.chained_assignment = None
 import torch
 from models.params import params
 from models.consts import *
-from models.frame_eppa import frame_eppa
+from models.frame_eppa import frame_eppa, set_device
+from tqdm import tqdm
 
 
-out_dir_path = '../output/{}'  # for cloud runs
+out_dir_path = '../def_opt_output/{}'  # for cloud runs
 path_shared = '../data/{}'
 
-WEEK = 1
-game_id = 2018090600
-play_id = 75
 plan_horizon = 0.8  # how far ahead to project (in seconds) while optimizing path
-plan_res = 0.3  # how long (in seconds) to execute plan. less than plan_horizon
+plan_res = 0.1  # how long (in seconds) to execute plan. less than plan_horizon
 frame_dt = 0.1  # how far apart (in seconds) the frames are
 plan_res_linspace = np.linspace(frame_dt, plan_res, np.round(plan_res/frame_dt).astype(int))[:,None]
 # 10*dt is the number of frames to increment by
@@ -22,6 +22,18 @@ res_incr = int(10 * plan_res)
 horizon_incr = int(10 * plan_horizon)
 reduce_eppa_mode = 'sum'  # choose from {'sum', 'max', 'softmax'}
 softmax_temp = 1000  # used for 'softmax' reduce_eppa_mode
+
+
+week_game_plays = [
+    [1, 2018090600, 75],        # jenkins push julio ob 10 yd
+    [13, 2018120212, 1834],     # gronk seam
+    [15, 2018121609, 1577],     # doug 9ers
+    [6, 2018101404, 977],       # 4 verts
+    [4, 2018093004, 5602],      # 4 hitches
+    [13, 2018120212, 2971]      # brady flash seam zone
+]
+# WEEK, game_id, play_id = week_game_plays[0]
+
 
 def reduce_eppa(frame_eppa, mode=reduce_eppa_mode):
     """ takes in (F, T) frame_eppa and reduces to scalar """
@@ -103,15 +115,12 @@ def optimize_def_frame(play_df, frame_id, frame_only):
         reachable_vels = reach_vels[reachable_idx]  # (R, 2); R is number of reachable spots
         reachable_locs = field_locs[reachable_idx]  # (R, 2); R is number of reachable spots
         frame_eppa_vals = []
-        print(f'{len(reachable_locs)} reachable locations found')
-        # print(reach_acc_mags.argmax())
+        # print(f'{len(reachable_locs)} reachable locations found')
         for i in range(len(reachable_locs)):
-            breakpoint()
             play_df.loc[(play_df.frameId == frame_id) & (play_df.nflId == def_id),
                         ['x_opt', 'y_opt', 'v_x_opt', 'v_y_opt', 'a_x_opt', 'a_y_opt']] = \
                         reachable_locs[i, 0], reachable_locs[i, 1], reachable_vels[i, 0],\
                         reachable_vels[i, 1], reachable_accs[i, 0], reachable_accs[i, 1]
-            breakpoint()
             frame_eppa_val = reduce_eppa(frame_eppa(play_df, frame_id))
             frame_eppa_vals.append(frame_eppa_val)
         opt_idx = np.array(frame_eppa_vals).argmin()
@@ -122,8 +131,8 @@ def optimize_def_frame(play_df, frame_id, frame_only):
         final_def_vel = def_vel[None] + final_def_acc[None] * plan_res_linspace
         final_def_acc = np.broadcast_to(final_def_acc, final_def_vel.shape)
         # NOTE below assumes frameId is sorted increasing
-        play_df.loc[(play_df.frameId.isin(frame_ids)) & (play_df.nflId == def_id), ['x_opt', 'y_opt', 'v_x_opt', 'v_y_opt', 'a_x_opt', 'a_y_opt']]\
-                = np.stack((final_def_loc, final_def_vel, final_def_acc), axis=1)
+        play_df.loc[(play_df.frameId.isin(frame_ids_opt)) & (play_df.nflId == def_id), ['x_opt', 'y_opt', 'v_x_opt', 'v_y_opt', 'a_x_opt', 'a_y_opt']]\
+                = np.concatenate((final_def_loc, final_def_vel, final_def_acc), axis=1)
     ### 3. return final optimized eppa for this frame
     return np.array([reduce_eppa(frame_eppa(play_df, frame_id_opt)) for frame_id_opt in frame_ids_opt])
 
@@ -148,8 +157,37 @@ def optimize_def(week, game_id, play_id):
     frame_ids = list(np.arange(ball_snap_frame+horizon_incr, pass_forward_frame+horizon_incr-res_incr+1, res_incr))
     eppas = np.concatenate([optimize_def_frame(play_df, ball_snap_frame, frame_only=True)]\
                 + [optimize_def_frame(play_df, int(frame_id), frame_only=False)
-                    for frame_id in frame_ids])
+                    for frame_id in tqdm(frame_ids)])
     return play_df, eppas
 
-optimized_play_df, eppas = optimize_def(WEEK, game_id, play_id)
-breakpoint()
+def run(week, game_id, play_id, save=True, device='cuda'):
+    set_device(device)
+    optimized_play_df, eppas = optimize_def(week, game_id, play_id)
+    if save:
+        play_dir = out_dir_path.format(f'def_opt_{game_id}_{play_id}')
+        os.makedirs(play_dir, exist_ok=True)
+        optimized_play_df.to_csv(os.path.join(play_dir, 'opt_play_df.csv'))
+        np.save(os.path.join(play_dir, 'eppas.npy'), eppas)
+    print(f'Finished running week {week}, game {game_id}, play {play_id}!')
+    return optimized_play_df, eppas
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-w', '--week', type=int, nargs='?', help='week of game')
+    parser.add_argument('-g', '--game', type=int, nargs='?', help='game ID')
+    parser.add_argument('-p', '--play', type=int, nargs='?', help='play ID')
+    parser.add_argument('-n', '--nosave', action='store_true', help='won\'t save if set')
+    args = parser.parse_args()
+
+    week, game, play, save = args.week, args.game, args.play, not args.nosave
+    if week is None or game is None or play is None:
+        if not (response := input('One or more of week, game, play was unspecified. Run all? [Y/n]: ').lower()) or response[0] != 'n':
+            import multiprocessing as mp; mp.set_start_method('spawn')
+            with mp.Pool(processes=min(16, len(week_game_plays))) as pool:
+                pool.starmap(run, [week_game_play + [save, f'cuda:{idx % torch.cuda.device_count()}'] for idx, week_game_play in enumerate(week_game_plays)])        
+        else:
+            exit()
+    else:
+        run(week, game, play, save)
+

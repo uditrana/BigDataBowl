@@ -16,6 +16,10 @@ dt = np.float64
 dt_torch = torch.float64
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+def set_device(new_device):
+    global device
+    device = new_device
+
 def torchify(np_arr):
     return torch.from_numpy(np_arr).to(device)
 
