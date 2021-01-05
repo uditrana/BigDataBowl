@@ -32,15 +32,18 @@ class PlaysDataset(torch.utils.data.Dataset):
                 all_data.append(pd.read_csv(os.path.join(data_dir, 'week%d_norm.csv' % week)))
 
             tracking_df = pd.concat(all_data)
+            epa_df = pd.read_pickle(os.path.join(data_dir, 'true_pass_vals_by_play.pkl'))
 
         else:
             # load csvs
             tracking_df = pd.read_csv(os.path.join(data_dir, 'week%s_norm.csv' % wk))
+            epa_df = pd.read_pickle(os.path.join(data_dir, 'true_pass_vals_by_play.pkl'))
 
         print('loaded files', time.time() - start_time)
 
         # generate unique id from game, play, frame ids
         tracking_df['uniqueId'] = tracking_df[['gameId', 'playId', 'frameId']].apply(lambda row: '_'.join(row.values.astype(str)), axis=1)
+        epa_df['uniqueId'] = epa_df[['gameId', 'playId', 'frameId']].apply(lambda row: '_'.join(row.values.astype(str)), axis=1)
 
         print('generated unique id', time.time() - start_time)
 
@@ -83,6 +86,11 @@ class PlaysDataset(torch.utils.data.Dataset):
         # merge tracking_df with ball_end and ball_start
         tracking_df = tracking_df.loc[(tracking_df.position != 'QB') & (tracking_df.nflId != 0)].merge(ball_start_end, on=['gameId', 'playId'])
         print('merged with ball', time.time() - start_time)
+
+        # clean epa_df and join with tracking_df
+        epa_df = epa_df[['uniqueId', 'xepa_inc', 'true_xepa_comp']].drop_duplicates().rename(columns={'true_xepa_comp': 'xepa_comp'})
+        tracking_df = tracking_df.merge(epa_df, how='left', on='uniqueId')
+        print('merged with epa_df', time.time() - start_time)
 
         if self.tuning is None or self.tuning == TuningParam.lamb:
             self.player_reached = tracking_df.loc[tracking_df.event == 'pass_arrived'][['uniqueId',
@@ -664,10 +672,13 @@ class CompProbModel(torch.nn.Module):
             trans_prob /= trans_prob.sum(dim=(1, 2), keepdim=True)  # (B, F, T)
 
             # calculate eppa
-            eppa1_pass_val = p_int_off * frame[:, 0, -6].view(-1, 1, 1) + (1 - p_int_off) * frame[:, 0, -5].view(-1, 1, 1)
-            eppa1 = eppa1_pass_val*trans_prob  # B, F, T
+            eppa_pass_val = p_int_off * frame[:, 0, -6].view(-1, 1, 1) + (1 - p_int_off) * frame[:, 0, -5].view(-1, 1, 1)
+            eppa = eppa_pass_val * trans_prob  # B, F, T
 
-            return eppa1
+            # TODO need to check if this works
+            mean_eppa = eppa * F.softmax(eppa.view(eppa.size(0), -1) / torch.exp(self.temp),
+                    dim=1).view_as(eppa)
+            return mean_eppa
 
 
 if __name__ == '__main__':
@@ -717,7 +728,7 @@ if __name__ == '__main__':
             columns=['gameId', 'playId'])
 
     model = CompProbModel(tti_sigma=0.31, a_max=7.67, s_max=9.42, tti_lambda_off=1.0, tti_lambda_def=1.0,
-            tti_epsilon=0.0001, reax_t=0.0001, ppc_alpha=1.2, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
+            tti_epsilon=0.0001, reax_t=0.0001, ppc_alpha=1.2, temp=10, tuning=TUNING, use_ppc=args.ppc, use_cuda=torch.cuda.is_available())
 
     if args.continue_training is not None:
         model.load_state_dict(torch.load(args.continue_training))
