@@ -3,14 +3,17 @@ import treelite_runtime
 import joblib
 import xgboost as xgb
 from tqdm import tqdm
-
+from consts import *
+from params import params
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from utils import get_repo_dir
+from os.path import join
 
 
 # rerun cell if xgboost loading isnt working for your machine (needs xgboost 1.2.1 exactly)
-# bst = joblib.load("models/in/xyac_model.model")
+# bst = joblib.load(join(get_repo_dir(), "analysis/models/in/xyac_model.model"))
 # xgb.plot_importance(bst)
 # scores = bst.get_score(importance_type='gain')
 # print(scores.keys())
@@ -20,11 +23,11 @@ from pathlib import Path
 
 # model = treelite.Model.from_xgboost(bst)
 # toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='models/in/xyacmymodel.so',
+# model.export_lib(toolchain=toolchain, libpath=join(get_repo_dir(), 'analysis/models/in/xyacmymodel.so'),
 
 #                  params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
 
-# bst = joblib.load("models/in/epa_model_rishav_no_time.model")
+# bst = joblib.load(join(get_repo_dir(), "analysis/models/in/epa_model_rishav_no_time.model"))
 # xgb.plot_importance(bst)
 # scores = bst.get_score(importance_type='gain')
 # print(scores.keys())
@@ -34,26 +37,12 @@ from pathlib import Path
 
 # model = treelite.Model.from_xgboost(bst)
 # toolchain = 'gcc'
-# model.export_lib(toolchain=toolchain, libpath='models/in/epa_no_time_mymodel.so',
+# model.export_lib(toolchain=toolchain, libpath=join(get_repo_dir(), 'analysis/models/in/epa_no_time_mymodel.so'),
 #                  params={'parallel_comp': 32}, verbose=True) #.so for ubuntu, .dylib for mac
 
-
-def params(): return None  # create an empty object to add params
-
-
-min_t_frame = 14
-max_t_frame = 47
-params.a_max = 7.67
-params.s_max = 9.42
-params.reax_t = 0.2
-params.tti_sigma = 0.31
-params.alpha = 1.2
-params.z_min = 1
-params.z_max = 3
-params.def_beta = 1
 
 # file loading and prep
-path_shared = '../data/{}'
+path_shared = join(get_repo_dir(), 'data/{}')
 
 dt = np.float64
 
@@ -77,37 +66,29 @@ pbp_joined["down3"] = np.where((pbp_joined['down_x'] == 3), 1, 0)
 pbp_joined["down4"] = np.where((pbp_joined['down_x'] == 4), 1, 0)
 pbp_joined["home"] = np.where((pbp_joined['posteam'] == pbp_joined['home_team']), 1, 0)
 
-# model constants
-T = np.linspace(0.1, 4, 40, dtype=dt)
-x = np.linspace(0.5, 119.5, 120, dtype=dt)
-y = np.linspace(-0.5, 53.5, 55, dtype=dt)
-y[0] = -0.2
-xx, yy = np.meshgrid(x, y)
-field_locs = np.stack((xx, yy)).reshape(2, -1).T  # (F, 2)
-tot_pass_cnt = len(field_locs[:, 1])*len(T)
 print(f'Considering {tot_pass_cnt} passes per frame')
 
 # historical trans model inputs/params
-L_given_ts = np.load('models/in/L_given_t.npy')
-T_given_Ls = pd.read_csv('models/in/T_given_L.csv')['p'].values.reshape(60, len(T))  # (61, T)
+L_given_ts = np.load(join(get_repo_dir(), 'analysis/models/in/L_given_t.npy'))
+T_given_Ls = pd.read_csv(join(get_repo_dir(), 'analysis/models/in/T_given_L.csv'))['p'].values.reshape(60, len(T))  # (61, T)
 # from L_given_t in historical notebook
 x_min, x_max = -9, 70
 y_min, y_max = -39, 40
 t_min, t_max = 10, 63
 
 # epa/xyac model loading
-bst = joblib.load("models/in/xyac_model.model")
+bst = joblib.load(join(get_repo_dir(), "analysis/models/in/xyac_model.model"))
 scores = bst.get_score(importance_type='gain')
 cols_when_model_builds = bst.feature_names
-xyac_predictor = treelite_runtime.Predictor('models/in/xyacmymodel.so')
-epa_model = joblib.load("models/in/epa_model_rishav_no_time.model")
+xyac_predictor = treelite_runtime.Predictor(joi(get_repo_dir(), 'analysis/models/in/xyacmymodel.so'))
+epa_model = joblib.load(join(get_repo_dir(), "analysis/models/in/epa_model_rishav_no_time.model"))
 scores = epa_model.get_score(importance_type='gain')
 cols_when_model_builds_ep = epa_model.feature_names
-epa_predictor = treelite_runtime.Predictor('models/in/epa_no_time_mymodel.so')
+epa_predictor = treelite_runtime.Predictor(join(get_repo_dir(), 'analysis/models/in/epa_no_time_mymodel.so'))
 
 
 def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats_df=False, viz_true_proj=False, save_all_dfs=False,
-                  out_dir_path='../output/{}', simulatePass=None):
+                  out_dir_path=join(get_repo_dir(), 'output/{}'), simulatePass=None):
     play_df = track_df[(track_df.playId == play_id) & (track_df.gameId == game_id)].sort_values(by='frameId')
 
     events = set(play_df.event.unique())
