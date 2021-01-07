@@ -1,6 +1,7 @@
 # Utility Libraries
 from datetime import datetime
 import matplotlib as mpl
+from matplotlib.colors import LinearSegmentedColormap
 from pandas.core import frame
 import pytz
 import pandas as pd
@@ -13,6 +14,8 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 import matplotlib.patches as patches
 from matplotlib.path import Path
+
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 # colors
 # import seaborn as sns
@@ -64,12 +67,15 @@ class AnimatePlay:
         self._MAX_FIELD_PLAYERS = 22
         self.YARD_PIXEL_COUNT = 70
 
-        self._show_p_mass = type(field_prob_df) != type(None)
+        self._show_p_mass = type(field_prob_df) != type(None) and ('p_mass' in field_prob_df.columns)
+        self._show_v_mass = type(field_prob_df) != type(None) and ('v_mass' in field_prob_df.columns)
         self._viz_proj = viz_proj
         self._field_prob_df = field_prob_df
         # self._CPLT = sns.color_palette("husl", 2)
         self._offense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'OFF']['teamAbbr'].iloc[0]]
+        # self._offense_color = colors.loc[colors.team == 'NFC']
         self._defense_color = colors.loc[colors.team == play_df.loc[play_df.team_pos == 'DEF']['teamAbbr'].iloc[0]]
+        # self._defense_color = colors.loc[colors.team == 'AFC']
         self._offense_colors = [
             self._offense_color['color1'].to_string(index=False).strip(),
             self._offense_color['color2'].to_string(index=False).strip()]
@@ -106,6 +112,10 @@ class AnimatePlay:
         self._fig = plt.figure(figsize=(plot_size_len, plot_size_len*(self._MAX_FIELD_Y/self._MAX_FIELD_X)))
 
         self._ax_field = plt.gca()
+
+        # divider = make_axes_locatable(self._ax_field)
+        # self._cax = divider.append_axes('right', size='2%', pad=0.1)
+        # self._cax = self._fig.add_axes([0.91, 0.13, 0.02, 0.75])
 
         self._ax_offense = self._ax_field.twinx()
         self._ax_defense = self._ax_field.twinx()
@@ -146,11 +156,11 @@ class AnimatePlay:
 
         # ball_snap_df = self._frame_data[(self._frame_data.event == 'ball_snap') & (self._frame_data.team == 'football')]
         self._ax_field.axvline(self._frame_data.iloc[0]['los'], color='k', linestyle='--')
-        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='white')
-        self._frame_text = self._ax_field.text(5, 51, 0, fontsize=15, color='white', ha='center')
-        self._event_text = self._ax_field.text(5, 49, None, fontsize=10, color='white', ha='center')
-        self._ball_loc_text = self._ax_field.text(5, 47, None, fontsize=12, color='white', ha='center')
-        self._pass_arr_text = self._ax_field.text(5, 45, None, fontsize=12, color='white', ha='center')
+        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='black')
+        self._frame_text = self._ax_field.text(5, 51, 0, fontsize=15, color='black', ha='center')
+        self._event_text = self._ax_field.text(5, 49, None, fontsize=10, color='black', ha='center')
+        self._ball_loc_text = self._ax_field.text(5, 47, None, fontsize=12, color='black', ha='center')
+        self._pass_arr_text = self._ax_field.text(5, 45, None, fontsize=12, color='black', ha='center')
 
         self.set_axis_plots(self._ax_offense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
         self.set_axis_plots(self._ax_defense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
@@ -158,31 +168,52 @@ class AnimatePlay:
 
         for idx in range(10, 120, 10):
             self._ax_field.axvline(idx, color='k', linestyle='-', alpha=0.05)
+            self._ax_field.text(idx+.1, 2, str(idx-10), rotation=90, color='k', alpha=0.2)
 
         self._ax_field.add_patch(patches.Rectangle((0, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._defense_colors[0], alpha=0.2))
+                                                   color='black', alpha=0.1))
         self._ax_field.add_patch(patches.Rectangle((110, 0), 10, self._MAX_FIELD_Y,
-                                                   color=self._offense_colors[0], alpha=0.2))
+                                                   color='black', alpha=0.1))
 
         if self._show_p_mass:
-            self._scat_field_pmass1 = self._ax_field.scatter(
+            pmin, pmax = 0, 1
+            norm = mpl.colors.Normalize(vmin=pmin, vmax=pmax)
+            col = self._offense_colors[1] if self._offense_color['color2_family'].to_string(
+                index=False).strip() != 'black' else self._offense_colors[0]
+            prob_cm = LinearSegmentedColormap.from_list('probability', [(0, 'white'), (1, col)])
+            self._scat_field_pmass = self._ax_field.scatter(
                 [],
                 [],
-                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.6)
+                s=self.YARD_PIXEL_COUNT, marker='s', alpha=0.7, cmap=prob_cm, vmin=pmin, vmax=pmax)
+            self._scat_field_pmass.set_cmap(prob_cm)
+            self._fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=prob_cm), ax=self._ax_field, orientation='vertical')
+
+        if self._show_v_mass:
+            vmin, vmax = self._field_prob_df.v_mass.min(), self._field_prob_df.v_mass.max()
+            norm = mpl.colors.Normalize(vmin=vmin, vmax=vmax)
+            col = self._offense_colors[1] if self._offense_color['color2_family'].to_string(
+                index=False).strip() not in ['black', 'gray'] else self._offense_colors[0]
+            if vmin >= 0:
+                val_cm = LinearSegmentedColormap.from_list('value', [(0, 'white'), (1, col)])
+            else:
+                val_cm = LinearSegmentedColormap.from_list(
+                    'value', [(0, 'black'), (abs(vmin / (vmax - vmin)) if vmax * vmin < 0 else 0, 'white'), (1, col)])
             self._scat_field_vmass = self._ax_field.scatter(
                 [],
                 [],
-                s=self.YARD_PIXEL_COUNT, marker='s', c=[])
+                s=self.YARD_PIXEL_COUNT, marker='s', c=[], cmap=val_cm, vmin=vmin, vmax=vmax, alpha=0.7)
+            self._scat_field_vmass.set_cmap(val_cm)
+            self._fig.colorbar(mpl.cm.ScalarMappable(norm=norm, cmap=val_cm), ax=self._ax_field, orientation='vertical')
 
         self._scat_offense = self._ax_offense.scatter(
             [],
             [],
-            s=500, color=self._offense_colors[0],
+            s=300, color=self._offense_colors[0],
             edgecolors=self._offense_colors[1])
         self._scat_offense_proj = self._ax_offense.scatter(
             [],
             [],
-            s=300, color=self._offense_colors[0], alpha=0.5, marker='x',
+            s=100, color=self._offense_colors[0], alpha=0.6, marker='x',
             edgecolors=self._offense_colors[1])
         # self._scat_offense_reax = self._ax_offense.scatter(
         #     [],
@@ -192,12 +223,12 @@ class AnimatePlay:
         self._scat_defense = self._ax_defense.scatter(
             [],
             [],
-            s=500, color=self._defense_colors[0],
+            s=300, color=self._defense_colors[0],
             edgecolors=self._defense_colors[1])
         self._scat_defense_proj = self._ax_defense.scatter(
             [],
             [],
-            s=300, color=self._defense_colors[0], alpha=0.5, marker='x',
+            s=100, color=self._defense_colors[0], alpha=0.5, marker='x',
             edgecolors=self._defense_colors[1])
         # self._scat_defense_reax = self._ax_defense.scatter(
         #     [],
@@ -212,9 +243,11 @@ class AnimatePlay:
         self._scat_name_list = []
         self._vel_list = []
         self._acc_list = []
+        self._vel_proj_list = []
+        self._acc_proj_list = []
         for _ in range(self._MAX_FIELD_PLAYERS):
             self._scat_jersey_list.append(self._ax_jersey.text(
-                0, 0, '', horizontalalignment='center', verticalalignment='center', c='white'))
+                0, 0, '', horizontalalignment='center', verticalalignment='center', c='white', size=8))
             self._scat_number_list.append(self._ax_jersey.text(
                 0, 0, '', horizontalalignment='center', verticalalignment='center', c='black'))
             self._scat_number_proj_list.append(self._ax_jersey.text(
@@ -226,6 +259,8 @@ class AnimatePlay:
 
             self._vel_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
             self._acc_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
+            self._vel_proj_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
+            self._acc_proj_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
             # self._or_list.append(self._ax_field.add_patch(patches.Arrow(0, 0, 0, 0, color='k')))
 
         self._scat_field = self._ax_field.scatter(
@@ -271,19 +306,23 @@ class AnimatePlay:
             # print(f"frameId: {frameId}, ")
             if len(frame_prob_df > 0):
                 try:
-                    self._scat_field_pmass1.set_array(frame_prob_df['p_mass_1'].to_numpy())
-                    self._scat_field_pmass1.set_offsets(
+                    self._scat_field_pmass.set_array(frame_prob_df['p_mass'].to_numpy())
+                    self._scat_field_pmass.set_offsets(
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
                     # self._scat_control.set_cmap(mpl.colors.Colormap.ListedColormap(['red', 'white', 'blue']))
                     # self._scat_field_pmass1.set_cmap('bwr')
-                    self._scat_field_pmass1.set_cmap('Blues')
-                    self._scat_field_pmass1.set_norm()
                 except:
                     pass
+
+        if self._show_v_mass:
+            frame_prob_df = self._field_prob_df.loc[self._field_prob_df.frameId == frameId]
+            # print(f"frameId: {frameId}, ")
+            if len(frame_prob_df > 0):
                 try:
-                    grayscale = 50
-                    self._scat_field_vmass.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
-                                                      for p in np.clip(frame_prob_df['v_mass'], 0, 1)])
+                    self._scat_field_vmass.set_array(frame_prob_df['v_mass'].to_numpy())
+                    # grayscale = 50
+                    # self._scat_field_vmass.set_color([(grayscale/255, grayscale/255, grayscale/255, p)
+                    #                                   for p in np.clip(frame_prob_df['v_mass'], 0, 1)])
                     self._scat_field_vmass.set_offsets(
                         np.vstack([frame_prob_df.ball_end_x, frame_prob_df.ball_end_y]).T)
                 except:
@@ -297,13 +336,27 @@ class AnimatePlay:
             row = row.fillna(-10)
             self._scat_jersey_list[index].set_position((row.x, row.y))
             self._scat_jersey_list[index].set_text(row.position)
-            self._scat_number_list[index].set_position((row.x, row.y+1.9))
+            self._scat_number_list[index].set_position((row.x, row.y+1.5))
             self._scat_number_list[index].set_text(int(row.jerseyNumber))
             if self._viz_proj:
-                self._scat_number_proj_list[index].set_position((row.proj_x, row.proj_y+1.9))
+                self._scat_number_proj_list[index].set_position((row.proj_x, row.proj_y+1.5))
                 self._scat_number_proj_list[index].set_text(int(row.jerseyNumber))
 
-            self._scat_name_list[index].set_position((row.x, row.y-1.9))
+                try:
+                    self._vel_proj_list[index].remove()
+                    self._vel_proj_list[index] = self._ax_field.add_patch(
+                        patches.Arrow(row.proj_x, row.proj_y, row.proj_v_x, row.proj_v_y, color='k', width=0.5))
+                except:
+                    pass
+
+                try:
+                    self._acc_proj_list[index].remove()
+                    self._acc_proj_list[index] = self._ax_field.add_patch(
+                        patches.Arrow(row.proj_x, row.proj_y, row.proj_a_x, row.proj_a_y, color='grey', width=0.75))
+                except:
+                    pass
+
+            self._scat_name_list[index].set_position((row.x, row.y-1.5))
             self._scat_name_list[index].set_text(row.displayName.split()[-1])
 
             # player_orientation_rad = self.deg_to_rad(self.convert_orientation(row.o))
@@ -312,11 +365,11 @@ class AnimatePlay:
 
             self._vel_list[index].remove()
             self._vel_list[index] = self._ax_field.add_patch(
-                patches.Arrow(row.x, row.y, row.v_x, row.v_y, color='k'))
+                patches.Arrow(row.x, row.y, row.v_x, row.v_y, color='k', width=0.75))
 
             self._acc_list[index].remove()
             self._acc_list[index] = self._ax_field.add_patch(
-                patches.Arrow(row.x, row.y, row.a_x, row.a_y, color='grey', width=2))
+                patches.Arrow(row.x, row.y, row.a_x, row.a_y, color='grey', width=1))
 
             # self._or_list[index].remove()
             # self._or_list[index] = self._ax_field.add_patch(

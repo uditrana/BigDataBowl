@@ -628,7 +628,7 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 row[f"true_xyac"] = xyac[true_f_idx, true_T_idx]
                 row[f"true_xepa_comp"] = xepa_comp[true_f_idx, true_T_idx]
                 row[f"true_xepa"] = xepa_comp[true_f_idx, true_T_idx] if true_pass_completed else xepa_inc
-                row[f"true_trans_ppc"] = trans[true_f_idx, true_T_idx]
+                row[f"true_trans"] = trans[true_f_idx, true_T_idx]
                 row[f"true_trans_tof"] = h_trans_prob[true_f_idx, true_T_idx]
                 row[f"true_eppa1"] = eppa1[true_f_idx, true_T_idx]
                 # row[f"true_eppa2"] = eppa2[true_f_idx, true_T_idx]
@@ -644,7 +644,8 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 'frameId': frame_id,
                 'ball_end_x': field_locs[:, 0],
                 'ball_end_y': field_locs[:, 1],
-                'eppa1': eppa1.max(axis=1),
+                'eppa1m': eppa1.max(axis=1),
+                'eppa1s': eppa1.sum(axis=1),
                 'eppa1_val': eppa1_pass_val[np.arange(eppa1_pass_val.shape[0]),  eppa1.argmax(axis=1)],
                 # 'eppa2': eppa2.max(axis=1),
                 # 'p_int_off_only': p_int_off_only.max(axis=1),
@@ -657,8 +658,9 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
                 'eppa1_wo_trans': eppa1_pass_val.max(axis=1),
                 # 'eppa2_wo_trans': eppa2_pass_val.max(axis=1),
                 'xyac': xyac.max(axis=1),
-                'xepa_comp': xepa_comp.max(axis=1),
+                'xepa_comp': xepa_comp.max(axis=1)-xepa_inc,
                 'xepa_inc': xepa_inc,
+                'trans': trans.sum(axis=1),
             })
             field_df.loc[field_df.ball_end_x < ball_start[0]-10, :] = np.nan  # remove backward passes
         # breakpoint()
