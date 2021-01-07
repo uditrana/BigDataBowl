@@ -99,6 +99,7 @@ class AnimatePlay:
         self._frame_data = play_df
         self._game_id, self._play_id = play_df.iloc[:1][['gameId', 'playId']].to_records(index=False)[0]
         self._times = sorted(play_df.time.unique())
+        self._frames = sorted(play_df.frameId.unique())
         self._stream = self.data_stream()
 
         self._date_format = "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -108,6 +109,7 @@ class AnimatePlay:
                  np.array(
                      [pytz.timezone('US/Eastern').localize(datetime.strptime(date_string, self._date_format))
                       for date_string in self._times]))])
+        self._mean_interval_ms = 100
 
         self._fig = plt.figure(figsize=(plot_size_len, plot_size_len*(self._MAX_FIELD_Y/self._MAX_FIELD_X)))
 
@@ -120,9 +122,10 @@ class AnimatePlay:
         self._ax_offense = self._ax_field.twinx()
         self._ax_defense = self._ax_field.twinx()
         self._ax_jersey = self._ax_field.twinx()
-
+        
+        print(len(self._frames))
         self.ani = animation.FuncAnimation(
-            self._fig, self.update, frames=len(self._times),
+            self._fig, self.update, frames=len(self._frames),
             interval=self._mean_interval_ms, init_func=self.setup_plot, blit=False)
 
         plt.close()
@@ -148,8 +151,8 @@ class AnimatePlay:
         return deg*np.pi/180
 
     def data_stream(self):
-        for time in self._times:
-            yield self._frame_data[self._frame_data.time == time]
+        for frame in self._frames:
+            yield self._frame_data[self._frame_data.frameId == frame]
 
     def setup_plot(self):
         self.set_axis_plots(self._ax_field, self._MAX_FIELD_X, self._MAX_FIELD_Y)
@@ -269,7 +272,11 @@ class AnimatePlay:
         return (self._scat_field, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
 
     def update(self, anim_frame):
-        pos_df = next(self._stream)
+        try:
+            pos_df = next(self._stream)
+        except StopIteration:
+            return (self._scat_field, self._scat_offense, self._scat_defense, *self._scat_jersey_list, *self._scat_number_list, *self._scat_name_list)
+
         frameId = pos_df.frameId.unique()[0]
         event = pos_df.event.unique()[0]
         self._frame_text.set_text(str(frameId))
