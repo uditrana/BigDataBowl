@@ -156,11 +156,11 @@ class AnimatePlay:
 
         # ball_snap_df = self._frame_data[(self._frame_data.event == 'ball_snap') & (self._frame_data.team == 'football')]
         self._ax_field.axvline(self._frame_data.iloc[0]['los'], color='k', linestyle='--')
-        self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='black')
+        # self._ax_field.set_title(f"game {self._game_id} play {self._play_id}", c='black')
         self._frame_text = self._ax_field.text(5, 51, 0, fontsize=15, color='black', ha='center')
-        self._event_text = self._ax_field.text(5, 49, None, fontsize=10, color='black', ha='center')
-        self._ball_loc_text = self._ax_field.text(5, 47, None, fontsize=12, color='black', ha='center')
-        self._pass_arr_text = self._ax_field.text(5, 45, None, fontsize=12, color='black', ha='center')
+        self._event_text = self._ax_field.text(5, 49, None, fontsize=8, color='black', ha='center')
+        # self._ball_loc_text = self._ax_field.text(5, 47, None, fontsize=12, color='black', ha='center')
+        # self._pass_arr_text = self._ax_field.text(5, 45, None, fontsize=12, color='black', ha='center')
 
         self.set_axis_plots(self._ax_offense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
         self.set_axis_plots(self._ax_defense, self._MAX_FIELD_X, self._MAX_FIELD_Y)
@@ -274,8 +274,8 @@ class AnimatePlay:
         event = pos_df.event.unique()[0]
         self._frame_text.set_text(str(frameId))
         self._event_text.set_text(str(event))
-        self._ball_loc_text.set_text(str(pos_df.loc[pos_df.nflId == 0][['x', 'y']].to_records(index=False)))
-        self._pass_arr_text.set_text(str(self._pass_arrival_loc))
+        # self._ball_loc_text.set_text(str(pos_df.loc[pos_df.nflId == 0][['x', 'y']].to_records(index=False)))
+        # self._pass_arr_text.set_text(str(self._pass_arrival_loc))
 
         for label in pos_df.team_pos.unique():
             label_data = pos_df[pos_df.team_pos == label]
