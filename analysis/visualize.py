@@ -87,11 +87,11 @@ class AnimatePlay:
                 index=False).strip():
             self._defense_colors = self._defense_colors[::-1]
 
-        try:
-            self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
-                                                 (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
-        except:
-            self._pass_arrival_loc = np.array([-10, -10])
+        # try:
+        #     self._pass_arrival_loc = play_df.loc[(play_df.event == 'pass_arrived') &
+        #                                          (play_df.nflId == 0)][['x', 'y']].iloc[0].to_numpy()
+        # except:
+        #     self._pass_arrival_loc = np.array([-10, -10])
         # print(self._pass_arrival_loc, type(self._pass_arrival_loc))
 
         # print(self._offense_color, self._defense_color, self._offense_colors, self._defense_colors)
@@ -122,7 +122,7 @@ class AnimatePlay:
         self._ax_offense = self._ax_field.twinx()
         self._ax_defense = self._ax_field.twinx()
         self._ax_jersey = self._ax_field.twinx()
-        
+
         print(len(self._frames))
         self.ani = animation.FuncAnimation(
             self._fig, self.update, frames=len(self._frames),
@@ -289,8 +289,7 @@ class AnimatePlay:
 
             if label == 'FTBL':
                 # self._scat_field.set_offsets(np.hstack([label_data.x, label_data.y]))
-                self._scat_field.set_offsets(
-                    np.vstack([[self._pass_arrival_loc[0], label_data.x], [self._pass_arrival_loc[1], label_data.y]]).T)
+                self._scat_field.set_offsets(np.vstack([label_data.x, label_data.y]).T)
             elif label == 'OFF':
                 self._scat_offense.set_offsets(np.vstack([label_data.x, label_data.y]).T)
                 if self._viz_proj:
