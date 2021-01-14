@@ -267,10 +267,13 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
         # int success if T-t_tot = dT <  0. Put through sigmoid to add temporal uncertainty around
         int_dT = T[None, :, None] - t_tot[:, None, :]  # F, T, J
         p_int = (1/(1. + np.exp(-np.pi/np.sqrt(3.0)/params.tti_sigma * int_dT, dtype=dt)))  # F, T, J
-        p_int_adj = p_int.copy()
-        p_int_def = (1-np.prod((1-p_int_adj[:, :, (player_teams == 'DEF')]), axis=-1))**params.def_beta  # F, T,
-        p_int_adj[:, :, player_teams == 'OFF'] = p_int_adj[:, :, player_teams == 'OFF']*(1-p_int_def[..., None])  # F, T, J
-        p_int_off = 1-np.prod((1-p_int_adj[:, :, (player_teams == 'OFF')]), axis=-1)  # F, T
+        p_int_def = 1-np.prod((1-p_int[:, :, (player_teams == 'DEF')]), axis=-1)  # F, T
+        p_int_off = 1-np.prod((1-p_int[:, :, (player_teams == 'OFF')]), axis=-1)  # F, T
+        p_int_off_adj = p_int_off * (1 - p_int_def)
+        # adjusting indiv p_int to renormalize sum
+        p_int_ind = p_int.copy()
+        p_int_ind[:, :, player_teams == 'DEF'] *= (p_int_def / np.sum(p_int_ind, where=(player_teams == 'DEF')))[..., None]
+        p_int_ind[:, :, player_teams == 'OFF'] *= (p_int_off_adj / np.sum(p_int_ind, where=(player_teams == 'OFF')))[..., None]
 
         # projected locations at T (F, T, J)
         d_proj = np.select(
@@ -348,72 +351,43 @@ def play_eppa_cpu(track_df, game_id, play_id, viz_df=False, save_np=False, stats
             traj_locs_z = 2.0+vz_0[None, :, None]*traj_ts-0.5*g*traj_ts*traj_ts  # F, T, T
             path_idxs = np.ravel_multi_index(np.stack((traj_locs_y_idx, traj_locs_x_idx)).reshape(2, -1), xx.shape)  # (F*T*T,)
             traj_t_idxs = np.rint(10*traj_ts - 1).flatten().astype(int)  # (F, T, T)
-            ind_p_int_traj_dt = p_int_adj[path_idxs, traj_t_idxs]  # F*T*T, J
-            ind_p_int_traj_dt = ind_p_int_traj_dt.reshape((*traj_locs_x_idx.shape, len(reaction_player_locs)))  # F, T, T, J
+            # TODO
+            ppi_ind_dt = p_int_ind[path_idxs, traj_t_idxs]  # F*T*T, J
+            ppi_ind_dt = ppi_ind_dt.reshape((*traj_locs_x_idx.shape, len(reaction_player_locs)))  # F, T, T, J
+            # ppi_off_dt = p_int_off[path_idxs, traj_t_idxs]  # F*T*T,
+            # ppi_off_dt = ppi_off_dt.reshape(traj_locs_x_idx.shape)  # F, T, T
+            # ppi_def_dt = p_int_def[path_idxs, traj_t_idxs]  # F*T*T,
+            # ppi_def_dt = ppi_def_dt.reshape(traj_locs_x_idx.shape)  # F, T, T
+            # ppi_off_adj_dt = p_int_off_adj[path_idxs, traj_t_idxs]  # F*T*T,
+            # ppi_off_adj_dt = ppi_off_adj_dt.reshape(traj_locs_x_idx.shape)  # F, T, T
 
             # account for ball height on traj and normalize each locations int probability
             lambda_z = np.where((traj_locs_z < params.z_max) & (traj_locs_z > params.z_min),
                                 1, 0)  # F, T, T # maybe change this to a normal distribution
-            ind_p_int_traj_dt = ind_p_int_traj_dt * lambda_z[:, :, :, None]  # F, T, T, J
-            # norm_factor = np.maximum(1., p_int_traj.sum(axis=-1))  # F, T, T
-            # p_int_traj_norm = (p_int_traj/norm_factor[..., None])  # F, T, T, J
+            ppi_ind_dt = ppi_ind_dt * lambda_z[:, :, :, None]  # F, T, T
+            # ppi_off_dt = ppi_off_dt * lambda_z[:, :, :, None]  # F, T, T
+            # ppi_off_adj_dt = ppi_off_adj_dt * lambda_z[:, :, :, None]  # F, T, T
+            # ppi_def_dt = ppi_def_dt * lambda_z[:, :, :, None]  # F, T, T
 
-            all_p_int_traj_dt = 1-np.prod((1-ind_p_int_traj_dt), axis=-1)  # F, T, T
+            # P(ball is still in play at t)
+            ball_in_play_traj = np.cumprod(1 - ppi_ind_dt, axis=-1)
+            ball_in_play_traj = np.roll(ball_in_play_traj, 1, axis=-1)  # F, T, T
+            ball_in_play_traj[:, :, 0] = 1
+            # ppi_def_adj_dt = ball_in_play_traj * ppi_def_dt  # F, T, T
+            # ppi_off_adj_dt = ball_in_play_traj * ppi_off_adj_dt  # F, T, T
+            ppi_ind_adj_dt = ball_in_play_traj[..., None] * ppi_ind_dt  # F, T, T, J
 
-            # independent int probs at each point on trajectory
-            # all_p_int_traj = np.sum(p_int_traj_norm, axis=-1)  # F, T, T
-            # all_p_int_traj = ne.evaluate('sum(p_int_traj_norm, axis=-1)')  # F, T, T
-            # off_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'OFF'))
-            # def_p_int_traj = np.sum(p_int_traj_norm, axis=-1, where=(player_teams == 'DEF'))
-            # ind_p_int_traj = p_int_traj_norm  # use for analyzing specific players F, T, T, J
+            # ppi_def_traj = np.cumsum(ppi_def_adj_dt, axis=-1)
+            # ppi_def_traj = np.einsum('ijj->ij', ppi_def_traj)  # (F, T)
+            # ppi_off_traj = np.cumsum(ppi_off_adj_dt, axis=-1)
+            # ppi_off_traj = np.einsum('ijj->ij', ppi_off_traj)  # (F, T)
+            ppi_ind_traj = np.cumsum(ppi_ind_adj_dt, axis=-2)
+            ppi_ind_traj = np.einsum('ijjk->ijk', ppi_ind_traj)  # (F, T, J)
+            ppi_off_traj = np.sum(ppi_ind_traj, where=(player_teams == 'OFF'), axis=-1)  # (F, T)
+            ppi_def_traj = np.sum(ppi_ind_traj, where=(player_teams == 'DEF'), axis=-1)  # (F, T)
+            ppi_rem_traj = 1 - ppi_def_traj - ppi_off_traj  # (F, T)
 
-            # calc decaying residual probs after you take away p_int on earlier times in the traj
-            compl_all_p_int_traj_dt = 1-all_p_int_traj_dt  # F, T, T
-            remaining_compl_p_int_traj_dt = np.cumprod(compl_all_p_int_traj_dt, axis=-1)  # F, T, T
-            # maximum 0 because if it goes negative the pass has been caught by then and theres no residual probability
-            remaining_compl_p_int_traj_dt = np.roll(remaining_compl_p_int_traj_dt, 1, axis=-1)  # F, T, T
-            remaining_compl_p_int_traj_dt[:, :, 0] = 1
-
-            # multiply residual prob by p_int at that location
-            # all_completion_prob_dt = shift_compl_cumsum * all_p_int_traj  # F, T, T
-            # off_completion_prob_dt = shift_compl_cumsum * off_p_int_traj  # F, T, T
-            # def_completion_prob_dt = shift_compl_cumsum * def_p_int_traj  # F, T, T
-            ind_completion_prob_dt = remaining_compl_p_int_traj_dt[:, :, :, None] * ind_p_int_traj_dt  # F, T, T, J
-            # ind_completion_prob_last_frame = np.einsum('ijjk->ijk', ind_completion_prob_dt)  # F, T, J
-            # def_completion_prob_last_frame = np.sum(ind_completion_prob_last_frame, axis=-1, keepdims=True, where=(player_teams == 'DEF'))  # F, T, 1
-            # ind_completion_prob_last_frame_adj_off = np.multiply(ind_completion_prob_last_frame, 1-def_completion_prob_last_frame,
-            #                                                      where=(player_teams == 'OFF'))
-            # tidx1, tidx2 = np.diag_indices(len(T))  # (T,), (T,)
-            # ind_completion_prob_dt[:,tidx1,tidx2,:] = ind_completion_prob_last_frame_adj_off
-
-            # now accumulate values over total traj for each team and take at T=t
-            # all_completion_prob = np.cumsum(all_completion_prob_dt, axis=-1)  # F, T, T
-            # off_completion_prob = np.cumsum(off_completion_prob_dt, axis=-1)  # F, T, T
-            # def_completion_prob = np.cumsum(def_completion_prob_dt, axis=-1)  # F, T, T
-            ind_completion_prob = np.cumsum(ind_completion_prob_dt, axis=-2)  # F, T, T, J
-
-            #     #### Toy example
-            # all_p_int_traj = [0, 0, 0.1, 0.2, 0.8, 0.8]
-            # c_all_p_int_traj=[1, 1, 0.9, 0.8, 0.2, 0.2]
-            # rem_compl_p_int_traj = [1, 1, 0.9, 0.72, 0.144, 0.0288]
-            # 0.1 + 0.9*0.2 + 0.72 * 0.8 + 0.144*0.8 = 0.9712
-            # adjust_compl_prob =        [0, 0, 0.1, 0.28, 0.84, 0.84]
-
-            # this einsum takes the diagonal values over the last two axes where T = t
-            # this takes care of the t > T issue.
-            # all_p_int_pass = np.einsum('ijj->ij', all_completion_prob)  # F, T
-            # off_p_int_pass = np.einsum('ijj->ij', off_completion_prob)  # F, T
-            # def_p_int_pass = np.einsum('ijj->ij', def_completion_prob)  # F, T
-            ind_p_int_pass = np.einsum('ijjk->ijk', ind_completion_prob)  # F, T, J
-            # no_p_int_pass = 1-all_p_int_pass #F, T
-
-            off_p_int_pass = (1-np.prod((1-ind_p_int_pass[:, :, (player_teams == 'OFF')]), axis=-1))  # F, T
-            def_p_int_pass = (1-np.prod((1-ind_p_int_pass[:, :, (player_teams == 'DEF')]), axis=-1))  # F, T
-
-            # assert np.allclose(all_p_int_pass, off_p_int_pass + def_p_int_pass, atol=0.01)
-            # assert np.allclose(all_p_int_pass, ind_p_int_pass.sum(-1), atol=0.01)
-            # breakpoint()
-            return off_p_int_pass, def_p_int_pass, ind_p_int_pass
+            return ppi_off_traj, ppi_def_traj, ppi_ind_traj
 
         def get_xyac():
             x_proj_def = x_proj[:, :, player_teams == "DEF"]  # F, T, J
